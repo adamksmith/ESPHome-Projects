@@ -1,0 +1,1189 @@
+esphome:
+  name: eg4-6000xp-1
+  friendly_name: Inverter 1
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+# Enable logging
+logger:
+  level: INFO
+# Enable Home Assistant API
+api:
+
+ota:
+  - platform: esphome
+#Utilizing a Wireless Tag ESP-32
+#Read more here: https://github.com/egnor/wt32-eth01
+ethernet:
+  type: LAN8720
+  mdc_pin: GPIO23
+  mdio_pin: GPIO18
+  clk_mode: GPIO0_IN
+  phy_addr: 1
+  power_pin: GPIO16
+
+uart:
+  - id: uart_modbus_inverter_1
+    rx_pin: GPIO5
+    tx_pin: GPIO17
+    baud_rate: 19200
+
+modbus:
+  - uart_id: uart_modbus_inverter_1
+    id: modbus_inverter_1
+
+modbus_controller:
+  - address: 1
+    update_interval: 5s
+    modbus_id: modbus_inverter_1
+    id: inverter_1
+
+sensor:
+  - platform: internal_temperature
+    name: "ESP32 Internal Temperature"
+    device_class: temperature
+    entity_category: diagnostic
+    unit_of_measurement: °C
+
+  - platform: modbus_controller
+    modbus_controller_id: inverter_1
+    name: "PV1 Voltage"
+    id: pv1_volt
+    register_type: read
+    address: 1
+    unit_of_measurement: "V"
+    accuracy_decimals: 2
+    value_type: U_WORD
+    filters: 
+      - multiply: 0.1
+
+  - platform: modbus_controller
+    modbus_controller_id: inverter_1
+    name: "PV2 Voltage"
+    id: pv2_volt
+    register_type: read
+    address: 2
+    unit_of_measurement: "V"
+    accuracy_decimals: 2
+    value_type: U_WORD
+    filters: 
+      - multiply: 0.1
+
+  - platform: modbus_controller
+    modbus_controller_id: inverter_1
+    name: "Battery Voltage"
+    id: vbat
+    register_type: read
+    address: 4
+    unit_of_measurement: "V"
+    accuracy_decimals: 2
+    value_type: U_WORD
+    filters: 
+      - multiply: 0.1
+
+  - platform: modbus_controller
+    modbus_controller_id: inverter_1
+    name: "Battery State of Charge"
+    id: bat_soc
+    register_type: read
+    address: 5
+    unit_of_measurement: "%"
+    device_class: battery
+    value_type: U_WORD
+  
+  - platform: modbus_controller
+    modbus_controller_id: inverter_1
+    name: "PV 1 Power"
+    id: pv1_pow
+    register_type: read
+    address: 7
+    unit_of_measurement: "W"
+    value_type: U_WORD
+  
+  - platform: modbus_controller
+    modbus_controller_id: inverter_1
+    name: "PV 2 Power"
+    id: pv2_pow
+    register_type: read
+    address: 8
+    unit_of_measurement: "W"
+    value_type: U_WORD
+  
+  - platform: template
+    id: pv_total_pow
+    name: "PV Total Power"
+    lambda: |-
+      return (id(pv1_pow).state + id(pv2_pow).state);
+    update_interval: 5s
+    unit_of_measurement: "W"
+    accuracy_decimals: 0
+  
+  - platform: modbus_controller
+    modbus_controller_id: inverter_1
+    name: "Battery Charge"
+    id: bat_charge
+    register_type: read
+    address: 10
+    unit_of_measurement: "W"
+    value_type: U_WORD
+
+  - platform: modbus_controller
+    modbus_controller_id: inverter_1
+    name: "Battery Discharge"
+    id: bat_discharge
+    register_type: read
+    address: 11
+    unit_of_measurement: "W"
+    value_type: U_WORD
+
+  - platform: template
+    id: battery_power
+    name: "Battery Power"
+    lambda: |-
+      return (id(bat_charge).state - id(bat_discharge).state);
+    update_interval: 5s
+    unit_of_measurement: "W"
+    accuracy_decimals: 0
+  
+  - platform: modbus_controller
+    modbus_controller_id: inverter_1
+    name: "Grid Voltage"
+    id: grid_volt
+    register_type: read
+    address: 12
+    unit_of_measurement: "V"
+    accuracy_decimals: 2
+    value_type: U_WORD
+    filters: 
+      - multiply: 0.1
+  
+  - platform: modbus_controller
+    modbus_controller_id: inverter_1
+    name: "Grid Frequency"
+    id: grid_freq
+    register_type: read
+    address: 15
+    unit_of_measurement: "Hz"
+    accuracy_decimals: 2
+    value_type: U_WORD
+    filters:
+      - multiply: 0.01
+
+  - platform: modbus_controller
+    modbus_controller_id: inverter_1
+    name: "Grid Power"
+    id: pinv
+    register_type: read
+    address: 27
+    unit_of_measurement: "W"
+    value_type: U_WORD
+  
+  - platform: modbus_controller
+    modbus_controller_id: inverter_1
+    name: "AC Charge Power"
+    id: prec
+    register_type: read
+    address: 17
+    unit_of_measurement: "W"
+    value_type: U_WORD
+
+  - platform: modbus_controller
+    modbus_controller_id: inverter_1
+    name: "EPS Voltage"
+    id: eps_volt
+    register_type: read
+    address: 20
+    unit_of_measurement: "V"
+    accuracy_decimals: 1
+    value_type: U_WORD
+    filters:
+       - multiply: 0.1
+  
+  - platform: modbus_controller
+    modbus_controller_id: inverter_1
+    name: "EPS Frequency"
+    id: eps_freq
+    register_type: read
+    address: 23
+    unit_of_measurement: Hz
+    accuracy_decimals: 2
+    value_type: U_WORD
+    filters:
+      - multiply: 0.01
+  
+  - platform: modbus_controller
+    modbus_controller_id: inverter_1
+    name: "EPS Power"
+    id: eps_power
+    register_type: read
+    address: 24
+    unit_of_measurement: W
+    value_type: U_WORD
+
+  - platform: modbus_controller
+    modbus_controller_id: inverter_1
+    name: "Temperature 1 Inverter"
+    id: temp1_inv
+    register_type: read
+    address: 65
+    device_class: temperature
+    unit_of_measurement: "°C"
+    value_type: U_WORD
+  
+  - platform: modbus_controller
+    modbus_controller_id: inverter_1
+    name: "Temperature 2 Inverter"
+    id: temp2_inv
+    register_type: read
+    address: 66
+    device_class: temperature
+    unit_of_measurement: "°C"
+    value_type: U_WORD
+
+  - platform: modbus_controller
+    modbus_controller_id: inverter_1
+    name: "Temperature Battery"
+    id: temp_battery
+    register_type: read
+    address: 67
+    device_class: temperature
+    unit_of_measurement: "°C"
+    value_type: U_WORD   
+
+  - platform: modbus_controller
+    modbus_controller_id: inverter_1
+    name: "Max Charge Current BMS"
+    id: max_charge_cur
+    register_type: read
+    address: 81
+    unit_of_measurement: Amps
+    value_type: U_WORD
+    entity_category: diagnostic
+    filters: 
+      - multiply: 0.01
+          
+  - platform: modbus_controller
+    modbus_controller_id: inverter_1
+    name: "Max Discharge Current BMS"
+    id: max_discharge_current
+    register_type: read
+    address: 82
+    unit_of_measurement: "A"
+    entity_category: diagnostic
+    value_type: U_WORD
+    filters: 
+      - multiply: 0.01
+
+  - platform: modbus_controller
+    modbus_controller_id: inverter_1
+    name: "Batteries in Parallel"
+    id: bat_num_par
+    register_type: read
+    address: 96
+    value_type: U_WORD
+    entity_category: diagnostic
+
+  - platform: modbus_controller
+    modbus_controller_id: inverter_1
+    name: "Battery Capacity"
+    id: bat_cap
+    register_type: read
+    address: 97
+    unit_of_measurement: "Ah"
+    value_type: U_WORD
+    entity_category: diagnostic
+
+  - platform: modbus_controller
+    modbus_controller_id: inverter_1
+    name: "Battery Current BMS"
+    id: bat_cur
+    register_type: read
+    address: 98
+    unit_of_measurement: "A"
+    value_type: S_WORD
+    filters: 
+      - multiply: 0.01
+          
+  - platform: modbus_controller
+    modbus_controller_id: inverter_1
+    name: "Cell Max Temp"
+    id: cell_max_temp
+    register_type: read
+    address: 103
+    device_class: temperature
+    unit_of_measurement: "°C"
+    value_type: U_WORD
+    filters: 
+      - multiply: 0.1
+
+  - platform: modbus_controller
+    modbus_controller_id: inverter_1
+    name: "Cell Min Temp"
+    id: cell_min_temp
+    register_type: read
+    address: 104
+    device_class: temperature
+    unit_of_measurement: "°C"
+    value_type: U_WORD
+    filters: 
+      - multiply: 0.1   
+
+  - platform: modbus_controller
+    modbus_controller_id: inverter_1
+    name: "L1 EPS Voltage"
+    id: l1eps_volt
+    register_type: read
+    address: 127
+    accuracy_decimals: 1
+    device_class: voltage
+    unit_of_measurement: "V"
+    value_type: U_WORD       
+    filters: 
+      - multiply: 0.1
+
+  - platform: modbus_controller
+    modbus_controller_id: inverter_1
+    name: "L2 EPS Voltage"
+    id: l2eps_volt
+    register_type: read
+    address: 128
+    accuracy_decimals: 1
+    device_class: voltage
+    unit_of_measurement: "V"
+    value_type: U_WORD       
+    filters: 
+      - multiply: 0.1     
+
+  - platform: modbus_controller
+    modbus_controller_id: inverter_1
+    name: "L1 EPS Power"
+    id: l1eps_power
+    register_type: read
+    address: 129
+    device_class: power
+    unit_of_measurement: "W"
+    value_type: U_WORD       
+    filters: 
+      - multiply: 1
+
+  - platform: modbus_controller
+    modbus_controller_id: inverter_1
+    name: "L2 EPS Power"
+    id: l2eps_power
+    register_type: read
+    address: 130
+    device_class: power
+    unit_of_measurement: "W"
+    value_type: U_WORD       
+    filters: 
+      - multiply: 1
+
+number:  
+  - platform: modbus_controller
+    modbus_controller_id: inverter_1
+    name: "AC Charge Limit"
+    id: ac_charge_limit
+    register_type: holding
+    address: 67
+    value_type: U_WORD
+    unit_of_measurement: "%"
+    min_value: 1
+    max_value: 90
+    step: 1
+
+  - platform: modbus_controller
+    modbus_controller_id: inverter_1
+    name: "AC Charge Start"
+    id: ac_charge_start
+    register_type: holding
+    address: 160
+    value_type: U_WORD
+    unit_of_measurement: "%"
+    min_value: 1
+    max_value: 90
+    step: 1
+    
+
+  - platform: modbus_controller
+    modbus_controller_id: inverter_1
+    name: "AC Charge Stop"
+    id: ac_charge_stop
+    register_type: holding
+    address: 161
+    value_type: U_WORD
+    unit_of_measurement: "%"
+    min_value: 20
+    max_value: 100
+    step: 1
+
+  - platform: modbus_controller
+    modbus_controller_id: inverter_1
+    name: "AC Charge Current"
+    id: ac_charge_cur
+    register_type: holding
+    address: 168
+    value_type: U_WORD
+    unit_of_measurement: "A"
+    min_value: 0
+    max_value: 125
+    step: 1
+
+text_sensor:
+#Get the Inverter Time - Diagnostics Only - Comment out when not needed
+  # - platform: modbus_controller
+  #   modbus_controller_id: inverter_1
+  #   name: "Inverter Time"
+  #   id: inverter_time
+  #   register_type: holding
+  #   address: 12
+  #   register_count: 3
+  #   response_size: 6
+  #   entity_category: diagnostic
+  #   # value_type: U_WORD
+  #   raw_encode: HEXBYTES
+  #   lambda: |-
+  #     // Extract minutes and hours hex strings
+  #     std::string hex_month_str = x.substr(0, 2); // First two characters
+  #     std::string hex_year_str = x.substr(2, 2);   // Last two characters
+  #     std::string hex_hours_str = x.substr(4, 2); // First two characters
+  #     std::string hex_day_str = x.substr(6, 2);   // Last two characters
+  #     std::string hex_seconds_str = x.substr(8, 2); // First two characters
+  #     std::string hex_minutes_str = x.substr(10, -1);   // Last two characters
+
+  #     // Convert hex strings to decimal integers
+  #     int year = std::stoi(hex_year_str, nullptr, 16);
+  #     int month = std::stoi(hex_month_str, nullptr, 16);
+  #     int day = std::stoi(hex_day_str, nullptr, 16);
+  #     int hours = std::stoi(hex_hours_str, nullptr, 16);
+  #     int minutes = std::stoi(hex_minutes_str, nullptr, 16);
+  #     int seconds = std::stoi(hex_seconds_str, nullptr, 16);
+
+  #     // Format the time string as "HH:MM:SS" using snprintf
+  #     char buffer[19]; // "MM-DD-YY HH:MM:SS" + null terminator
+  #     snprintf(buffer, sizeof(buffer), "%02d-%02d-%02d %02d:%02d:%02d", month, day, year, hours, minutes, seconds);
+  #     // Create a std::string from the buffer
+  #     std::string time_str(buffer);
+  #     // Return the formatted time string
+  #     return time_str;
+
+#AC Charge Start 1
+  - platform: modbus_controller
+    modbus_controller_id: inverter_1
+    name: "AC Charge Start 1"
+    id: ac_charge_pri_start_1
+    register_type: holding
+    address: 68
+    entity_category: diagnostic
+    raw_encode: HEXBYTES
+    lambda: |-
+      // Extract minutes and hours hex strings
+      std::string hex_minutes_str = x.substr(0, 2); // First two characters
+      std::string hex_hours_str = x.substr(2, -1);   // Last two characters
+
+      // Convert hex strings to decimal integers
+      int minutes = std::stoi(hex_minutes_str, nullptr, 16);
+      int hours = std::stoi(hex_hours_str, nullptr, 16);
+
+      // Format the time string as "HH:MM:SS" using snprintf
+      char buffer[9]; // "HH:MM:SS" + null terminator
+      snprintf(buffer, sizeof(buffer), "%02d:%02d:%02d", hours, minutes, 0);
+
+      // Create a std::string from the buffer
+      std::string time_str(buffer);
+
+      // Set the time on the datetime sensor using make_call()
+      auto call = id(charge_start_1).make_call();
+      call.set_time(time_str);
+      call.perform();
+
+      // Return the formatted time string
+      return time_str;
+#AC Charge Stop 1
+  - platform: modbus_controller
+    modbus_controller_id: inverter_1
+    name: "AC Charge End 1"
+    id: ac_charge_pri_end_1
+    register_type: holding
+    address: 69
+    entity_category: diagnostic
+    # value_type: U_WORD
+    raw_encode: HEXBYTES
+    lambda: |-
+      // Extract minutes and hours hex strings
+      std::string hex_minutes_str = x.substr(0, 2); // First two characters
+      std::string hex_hours_str = x.substr(2, -1);   // Last two characters
+
+      // Convert hex strings to decimal integers
+      int minutes = std::stoi(hex_minutes_str, nullptr, 16);
+      int hours = std::stoi(hex_hours_str, nullptr, 16);
+
+      // Format the time string as "HH:MM:SS" using snprintf
+      char buffer[9]; // "HH:MM:SS" + null terminator
+      snprintf(buffer, sizeof(buffer), "%02d:%02d:%02d", hours, minutes, 0);
+
+      // Create a std::string from the buffer
+      std::string time_str(buffer);
+
+      // Set the time on the datetime sensor using make_call()
+      auto call = id(charge_stop_1).make_call();
+      call.set_time(time_str);
+      call.perform();
+
+      // Return the formatted time string
+      return time_str;
+#AC Charge Start 2
+  - platform: modbus_controller
+    modbus_controller_id: inverter_1
+    name: "AC Charge Start 2"
+    id: ac_charge_pri_start_2
+    register_type: holding
+    address: 70
+    entity_category: diagnostic
+    raw_encode: HEXBYTES
+    lambda: |-
+      // Extract minutes and hours hex strings
+      std::string hex_minutes_str = x.substr(0, 2); // First two characters
+      std::string hex_hours_str = x.substr(2, -1);   // Last two characters
+
+      // Convert hex strings to decimal integers
+      int minutes = std::stoi(hex_minutes_str, nullptr, 16);
+      int hours = std::stoi(hex_hours_str, nullptr, 16);
+
+      // Format the time string as "HH:MM:SS" using snprintf
+      char buffer[9]; // "HH:MM:SS" + null terminator
+      snprintf(buffer, sizeof(buffer), "%02d:%02d:%02d", hours, minutes, 0);
+
+      // Create a std::string from the buffer
+      std::string time_str(buffer);
+
+      // Set the time on the datetime sensor using make_call()
+      auto call = id(charge_start_2).make_call();
+      call.set_time(time_str);
+      call.perform();
+
+      // Return the formatted time string
+      return time_str;
+#AC Charge Stop 2
+  - platform: modbus_controller
+    modbus_controller_id: inverter_1
+    name: "AC Charge End 2"
+    id: ac_charge_pri_end_2
+    register_type: holding
+    address: 71
+    entity_category: diagnostic
+    # value_type: U_WORD
+    raw_encode: HEXBYTES
+    lambda: |-
+      // Extract minutes and hours hex strings
+      std::string hex_minutes_str = x.substr(0, 2); // First two characters
+      std::string hex_hours_str = x.substr(2, -1);   // Last two characters
+
+      // Convert hex strings to decimal integers
+      int minutes = std::stoi(hex_minutes_str, nullptr, 16);
+      int hours = std::stoi(hex_hours_str, nullptr, 16);
+
+      // Format the time string as "HH:MM:SS" using snprintf
+      char buffer[9]; // "HH:MM:SS" + null terminator
+      snprintf(buffer, sizeof(buffer), "%02d:%02d:%02d", hours, minutes, 0);
+
+      // Create a std::string from the buffer
+      std::string time_str(buffer);
+
+      // Set the time on the datetime sensor using make_call()
+      auto call = id(charge_stop_2).make_call();
+      call.set_time(time_str);
+      call.perform();
+
+      // Return the formatted time string
+      return time_str;
+#AC Charge Start 3
+  - platform: modbus_controller
+    modbus_controller_id: inverter_1
+    name: "AC Charge Start 3"
+    id: ac_charge_pri_start_3
+    register_type: holding
+    address: 72
+    entity_category: diagnostic
+    raw_encode: HEXBYTES
+    lambda: |-
+      // Extract minutes and hours hex strings
+      std::string hex_minutes_str = x.substr(0, 2); // First two characters
+      std::string hex_hours_str = x.substr(2, -1);   // Last two characters
+
+      // Convert hex strings to decimal integers
+      int minutes = std::stoi(hex_minutes_str, nullptr, 16);
+      int hours = std::stoi(hex_hours_str, nullptr, 16);
+
+      // Format the time string as "HH:MM:SS" using snprintf
+      char buffer[9]; // "HH:MM:SS" + null terminator
+      snprintf(buffer, sizeof(buffer), "%02d:%02d:%02d", hours, minutes, 0);
+
+      // Create a std::string from the buffer
+      std::string time_str(buffer);
+
+      // Set the time on the datetime sensor using make_call()
+      auto call = id(charge_start_3).make_call();
+      call.set_time(time_str);
+      call.perform();
+
+      // Return the formatted time string
+      return time_str;
+#AC Charge Stop 3
+  - platform: modbus_controller
+    modbus_controller_id: inverter_1
+    name: "AC Charge End 3"
+    id: ac_charge_pri_end_3
+    register_type: holding
+    address: 73
+    entity_category: diagnostic
+    # value_type: U_WORD
+    raw_encode: HEXBYTES
+    lambda: |-
+      // Extract minutes and hours hex strings
+      std::string hex_minutes_str = x.substr(0, 2); // First two characters
+      std::string hex_hours_str = x.substr(2, -1);   // Last two characters
+
+      // Convert hex strings to decimal integers
+      int minutes = std::stoi(hex_minutes_str, nullptr, 16);
+      int hours = std::stoi(hex_hours_str, nullptr, 16);
+
+      // Format the time string as "HH:MM:SS" using snprintf
+      char buffer[9]; // "HH:MM:SS" + null terminator
+      snprintf(buffer, sizeof(buffer), "%02d:%02d:%02d", hours, minutes, 0);
+
+      // Create a std::string from the buffer
+      std::string time_str(buffer);
+
+      // Set the time on the datetime sensor using make_call()
+      auto call = id(charge_stop_3).make_call();
+      call.set_time(time_str);
+      call.perform();
+
+      // Return the formatted time string
+      return time_str;
+
+# AC First Start 1
+  - platform: modbus_controller
+    modbus_controller_id: inverter_1
+    name: "AC First Priority Start 1"
+    id: ac_first_pri_start_1
+    register_type: holding
+    address: 152
+    entity_category: diagnostic
+    raw_encode: HEXBYTES
+    lambda: |-
+      // Extract minutes and hours hex strings
+      std::string hex_minutes_str = x.substr(0, 2); // First two characters
+      std::string hex_hours_str = x.substr(2, -1);   // Last two characters
+
+      // Convert hex strings to decimal integers
+      int minutes = std::stoi(hex_minutes_str, nullptr, 16);
+      int hours = std::stoi(hex_hours_str, nullptr, 16);
+
+      // Format the time string as "HH:MM:SS" using snprintf
+      char buffer[9]; // "HH:MM:SS" + null terminator
+      snprintf(buffer, sizeof(buffer), "%02d:%02d:%02d", hours, minutes, 0);
+
+      // Create a std::string from the buffer
+      std::string time_str(buffer);
+
+      // Set the time on the datetime sensor using make_call()
+      auto call = id(first_start_1).make_call();
+      call.set_time(time_str);
+      call.perform();
+
+      // Return the formatted time string
+      return time_str;
+# AC First Stop 1
+  - platform: modbus_controller
+    modbus_controller_id: inverter_1
+    name: "AC First Priority End 1"
+    id: ac_first_pri_end_1
+    register_type: holding
+    address: 153
+    entity_category: diagnostic
+    # value_type: U_WORD
+    raw_encode: HEXBYTES
+    lambda: |-
+      // Extract minutes and hours hex strings
+      std::string hex_minutes_str = x.substr(0, 2); // First two characters
+      std::string hex_hours_str = x.substr(2, -1);   // Last two characters
+
+      // Convert hex strings to decimal integers
+      int minutes = std::stoi(hex_minutes_str, nullptr, 16);
+      int hours = std::stoi(hex_hours_str, nullptr, 16);
+
+      // Format the time string as "HH:MM:SS" using snprintf
+      char buffer[9]; // "HH:MM:SS" + null terminator
+      snprintf(buffer, sizeof(buffer), "%02d:%02d:%02d", hours, minutes, 0);
+
+      // Create a std::string from the buffer
+      std::string time_str(buffer);
+
+      // Set the time on the datetime sensor using make_call()
+      auto call = id(first_stop_1).make_call();
+      call.set_time(time_str);
+      call.perform();
+
+      // Return the formatted time string
+      return time_str;
+# AC First Start 2
+  - platform: modbus_controller
+    modbus_controller_id: inverter_1
+    name: "AC First Priority Start 2"
+    id: ac_first_pri_start_2
+    register_type: holding
+    address: 154
+    entity_category: diagnostic
+    raw_encode: HEXBYTES
+    lambda: |-
+      // Extract minutes and hours hex strings
+      std::string hex_minutes_str = x.substr(0, 2); // First two characters
+      std::string hex_hours_str = x.substr(2, -1);   // Last two characters
+
+      // Convert hex strings to decimal integers
+      int minutes = std::stoi(hex_minutes_str, nullptr, 16);
+      int hours = std::stoi(hex_hours_str, nullptr, 16);
+
+      // Format the time string as "HH:MM:SS" using snprintf
+      char buffer[9]; // "HH:MM:SS" + null terminator
+      snprintf(buffer, sizeof(buffer), "%02d:%02d:%02d", hours, minutes, 0);
+
+      // Create a std::string from the buffer
+      std::string time_str(buffer);
+
+      // Set the time on the datetime sensor using make_call()
+      auto call = id(first_start_2).make_call();
+      call.set_time(time_str);
+      call.perform();
+
+      // Return the formatted time string
+      return time_str;
+# AC First Stop 2
+  - platform: modbus_controller
+    modbus_controller_id: inverter_1
+    name: "AC First Priority End 2"
+    id: ac_first_pri_end_2
+    register_type: holding
+    address: 155
+    entity_category: diagnostic
+    # value_type: U_WORD
+    raw_encode: HEXBYTES
+    lambda: |-
+      // Extract minutes and hours hex strings
+      std::string hex_minutes_str = x.substr(0, 2); // First two characters
+      std::string hex_hours_str = x.substr(2, -1);   // Last two characters
+
+      // Convert hex strings to decimal integers
+      int minutes = std::stoi(hex_minutes_str, nullptr, 16);
+      int hours = std::stoi(hex_hours_str, nullptr, 16);
+
+      // Format the time string as "HH:MM:SS" using snprintf
+      char buffer[9]; // "HH:MM:SS" + null terminator
+      snprintf(buffer, sizeof(buffer), "%02d:%02d:%02d", hours, minutes, 0);
+
+      // Create a std::string from the buffer
+      std::string time_str(buffer);
+
+      // Set the time on the datetime sensor using make_call()
+      auto call = id(first_stop_2).make_call();
+      call.set_time(time_str);
+      call.perform();
+
+      // Return the formatted time string
+      return time_str;
+# AC First Start 3
+  - platform: modbus_controller
+    modbus_controller_id: inverter_1
+    name: "AC First Priority Start 3"
+    id: ac_first_pri_start_3
+    register_type: holding
+    address: 156
+    entity_category: diagnostic
+    raw_encode: HEXBYTES
+    lambda: |-
+      // Extract minutes and hours hex strings
+      std::string hex_minutes_str = x.substr(0, 2); // First two characters
+      std::string hex_hours_str = x.substr(2, -1);   // Last two characters
+
+      // Convert hex strings to decimal integers
+      int minutes = std::stoi(hex_minutes_str, nullptr, 16);
+      int hours = std::stoi(hex_hours_str, nullptr, 16);
+
+      // Format the time string as "HH:MM:SS" using snprintf
+      char buffer[9]; // "HH:MM:SS" + null terminator
+      snprintf(buffer, sizeof(buffer), "%02d:%02d:%02d", hours, minutes, 0);
+
+      // Create a std::string from the buffer
+      std::string time_str(buffer);
+
+      // Set the time on the datetime sensor using make_call()
+      auto call = id(first_start_3).make_call();
+      call.set_time(time_str);
+      call.perform();
+
+      // Return the formatted time string
+      return time_str;
+# AC First Stop 3
+  - platform: modbus_controller
+    modbus_controller_id: inverter_1
+    name: "AC First Priority End 3"
+    id: ac_first_pri_end_3
+    register_type: holding
+    address: 157
+    entity_category: diagnostic
+    # value_type: U_WORD
+    raw_encode: HEXBYTES
+    lambda: |-
+      // Extract minutes and hours hex strings
+      std::string hex_minutes_str = x.substr(0, 2); // First two characters
+      std::string hex_hours_str = x.substr(2, -1);   // Last two characters
+
+      // Convert hex strings to decimal integers
+      int minutes = std::stoi(hex_minutes_str, nullptr, 16);
+      int hours = std::stoi(hex_hours_str, nullptr, 16);
+
+      // Format the time string as "HH:MM:SS" using snprintf
+      char buffer[9]; // "HH:MM:SS" + null terminator
+      snprintf(buffer, sizeof(buffer), "%02d:%02d:%02d", hours, minutes, 0);
+
+      // Create a std::string from the buffer
+      std::string time_str(buffer);
+
+      // Set the time on the datetime sensor using make_call()
+      auto call = id(first_stop_3).make_call();
+      call.set_time(time_str);
+      call.perform();
+
+      // Return the formatted time string
+      return time_str;
+
+  - platform: modbus_controller
+    modbus_controller_id: inverter_1
+    name: "Fault Code"
+    id: fault
+    register_type: read
+    address: 60
+    register_count: 2
+    response_size: 2
+    raw_encode: NONE
+    entity_category: diagnostic
+
+  - platform: modbus_controller
+    modbus_controller_id: inverter_1
+    name: "Warning Code"
+    id: warning
+    register_type: read
+    address: 62
+    register_count: 2
+    response_size: 2
+    raw_encode: NONE
+    entity_category: diagnostic
+  
+  - platform: modbus_controller
+    modbus_controller_id: inverter_1
+    name: "Test_Poke"
+    id: test_number
+    raw_encode: HEXBYTES
+    register_type: holding
+    address: 21
+
+  - platform: modbus_controller
+    modbus_controller_id: inverter_1
+    name: "Inverter Serial Number"
+    id: serial_num
+    register_type: read
+    address: 115
+    register_count: 5
+    response_size: 9
+    entity_category: diagnostic
+
+  - platform: modbus_controller
+    modbus_controller_id: inverter_1
+    name: "Working Mode"
+    id: state
+    register_type: read
+    address: 0
+    bitmask: 0x1
+    raw_encode: HEXBYTES
+    lambda: |-
+      if(x == "0000"){
+          return std::string("Standby");
+      }
+      if(x == "0001"){
+          return std::string("Fault");
+      }
+      if(x == "0010"){
+        return std::string("Grid Mode");
+      }
+      if(x == "00c0"){
+          return std::string("Solar/Battery Mode");
+      }
+      if(x == "0014"){
+          return std::string("Battery/Grid Mode");
+      }
+      if(x == "0040"){
+          return std::string("Battery/Off-Grid Mode");
+      }
+
+
+      return x;
+
+datetime:
+#AC Charge Start 1
+  - platform: template
+    id: charge_start_1
+    type: time
+    name: "AC Charge Start 1"
+    optimistic: yes
+    restore_value: true
+    on_value:
+      then:
+        - lambda: |-
+            uint8_t hours =  charge_start_1 -> hour;
+            uint8_t minutes = charge_start_1 -> minute;
+
+            uint16_t minuteshours = minutes << 8 | hours;
+            char str[2] = {minutes, hours};
+            ESP_LOGD("obama 2", str);
+            esphome::modbus_controller::ModbusCommandItem write_minute_hour_command = esphome::modbus_controller::ModbusCommandItem::create_write_single_command(inverter_1,68,minuteshours);
+            inverter_1->queue_command(write_minute_hour_command);
+#AC Charge Stop 1
+  - platform: template
+    id: charge_stop_1
+    type: time
+    name: "AC Charge Stop 1"
+    optimistic: yes
+    restore_value: true
+    on_value:
+      then:
+        - lambda: |-
+            uint8_t hours =  charge_stop_1 -> hour;
+            uint8_t minutes = charge_stop_1 -> minute;
+
+            uint16_t minuteshours = minutes << 8 | hours;
+            char str[2] = {minutes, hours};
+            ESP_LOGD("obama", str);
+            esphome::modbus_controller::ModbusCommandItem write_minute_hour_command = esphome::modbus_controller::ModbusCommandItem::create_write_single_command(inverter_1,69,minuteshours);
+            inverter_1->queue_command(write_minute_hour_command);
+#AC Charge Start 2
+  - platform: template
+    id: charge_start_2
+    type: time
+    name: "AC Charge Start 2"
+    optimistic: yes
+    restore_value: true
+    on_value:
+      then:
+        - lambda: |-
+            uint8_t hours =  charge_start_2 -> hour;
+            uint8_t minutes = charge_start_2 -> minute;
+
+            uint16_t minuteshours = minutes << 8 | hours;
+            char str[2] = {minutes, hours};
+            ESP_LOGD("obama 2", str);
+            esphome::modbus_controller::ModbusCommandItem write_minute_hour_command = esphome::modbus_controller::ModbusCommandItem::create_write_single_command(inverter_1,70,minuteshours);
+            inverter_1->queue_command(write_minute_hour_command);
+#AC Charge Stop 2
+  - platform: template
+    id: charge_stop_2
+    type: time
+    name: "AC Charge Stop 2"
+    optimistic: yes
+    restore_value: true
+    on_value:
+      then:
+        - lambda: |-
+            uint8_t hours =  charge_stop_2 -> hour;
+            uint8_t minutes = charge_stop_2 -> minute;
+
+            uint16_t minuteshours = minutes << 8 | hours;
+            char str[2] = {minutes, hours};
+            ESP_LOGD("obama", str);
+            esphome::modbus_controller::ModbusCommandItem write_minute_hour_command = esphome::modbus_controller::ModbusCommandItem::create_write_single_command(inverter_1,71,minuteshours);
+            inverter_1->queue_command(write_minute_hour_command);
+#AC Charge Start 3
+  - platform: template
+    id: charge_start_3
+    type: time
+    name: "AC Charge Start 3"
+    optimistic: yes
+    restore_value: true
+    on_value:
+      then:
+        - lambda: |-
+            uint8_t hours =  charge_start_3 -> hour;
+            uint8_t minutes = charge_start_3 -> minute;
+
+            uint16_t minuteshours = minutes << 8 | hours;
+            char str[2] = {minutes, hours};
+            ESP_LOGD("obama 2", str);
+            esphome::modbus_controller::ModbusCommandItem write_minute_hour_command = esphome::modbus_controller::ModbusCommandItem::create_write_single_command(inverter_1,72,minuteshours);
+            inverter_1->queue_command(write_minute_hour_command);
+#AC Charge Stop 3
+  - platform: template
+    id: charge_stop_3
+    type: time
+    name: "AC Charge Stop 3"
+    optimistic: yes
+    restore_value: true
+    on_value:
+      then:
+        - lambda: |-
+            uint8_t hours =  charge_stop_3 -> hour;
+            uint8_t minutes = charge_stop_3 -> minute;
+
+            uint16_t minuteshours = minutes << 8 | hours;
+            char str[2] = {minutes, hours};
+            ESP_LOGD("obama", str);
+            esphome::modbus_controller::ModbusCommandItem write_minute_hour_command = esphome::modbus_controller::ModbusCommandItem::create_write_single_command(inverter_1,73,minuteshours);
+            inverter_1->queue_command(write_minute_hour_command);
+#AC First Start 1
+  - platform: template
+    id: first_start_1
+    type: time
+    name: "AC First Start 1"
+    optimistic: yes
+    on_value:
+      then:
+        - lambda: |-
+            uint8_t hours =  first_start_1 -> hour;
+            uint8_t minutes = first_start_1 -> minute;
+
+            uint16_t minuteshours = minutes << 8 | hours;
+            char str[2] = {minutes, hours};
+            ESP_LOGD("obama", str);
+            esphome::modbus_controller::ModbusCommandItem write_minute_hour_command = esphome::modbus_controller::ModbusCommandItem::create_write_single_command(inverter_1,152,minuteshours);
+            inverter_1->queue_command(write_minute_hour_command);
+#AC First Stop 1
+  - platform: template
+    id: first_stop_1
+    type: time
+    name: "AC First Stop 1"
+    optimistic: yes
+    on_value:
+      then:
+        - lambda: |-
+            uint8_t hours =  first_stop_1 -> hour;
+            uint8_t minutes = first_stop_1 -> minute;
+
+            uint16_t minuteshours = minutes << 8 | hours;
+            char str[2] = {minutes, hours};
+            ESP_LOGD("obama", str);
+            esphome::modbus_controller::ModbusCommandItem write_minute_hour_command = esphome::modbus_controller::ModbusCommandItem::create_write_single_command(inverter_1,153,minuteshours);
+            inverter_1->queue_command(write_minute_hour_command);
+# AC First Start 2
+  - platform: template
+    id: first_start_2
+    type: time
+    name: "AC First Start 2"
+    optimistic: yes
+    on_value:
+      then:
+        - lambda: |-
+            uint8_t hours =  first_start_2 -> hour;
+            uint8_t minutes = first_start_2 -> minute;
+
+            uint16_t minuteshours = minutes << 8 | hours;
+            char str[2] = {minutes, hours};
+            ESP_LOGD("obama", str);
+            esphome::modbus_controller::ModbusCommandItem write_minute_hour_command = esphome::modbus_controller::ModbusCommandItem::create_write_single_command(inverter_1,154,minuteshours);
+            inverter_1->queue_command(write_minute_hour_command);
+# AC First Stop 2
+  - platform: template
+    id: first_stop_2
+    type: time
+    name: "AC First Stop 2"
+    optimistic: yes
+    on_value:
+      then:
+        - lambda: |-
+            uint8_t hours =  first_stop_2 -> hour;
+            uint8_t minutes = first_stop_2 -> minute;
+
+            uint16_t minuteshours = minutes << 8 | hours;
+            char str[2] = {minutes, hours};
+            ESP_LOGD("obama", str);
+            esphome::modbus_controller::ModbusCommandItem write_minute_hour_command = esphome::modbus_controller::ModbusCommandItem::create_write_single_command(inverter_1,155,minuteshours);
+            inverter_1->queue_command(write_minute_hour_command);
+#AC First Start 3
+  - platform: template
+    id: first_start_3
+    type: time
+    name: "AC First Start 3"
+    optimistic: yes
+    on_value:
+      then:
+        - lambda: |-
+            uint8_t hours =  first_start_3 -> hour;
+            uint8_t minutes = first_start_3 -> minute;
+
+            uint16_t minuteshours = minutes << 8 | hours;
+            char str[2] = {minutes, hours};
+            ESP_LOGD("obama", str);
+            esphome::modbus_controller::ModbusCommandItem write_minute_hour_command = esphome::modbus_controller::ModbusCommandItem::create_write_single_command(inverter_1,156,minuteshours);
+            inverter_1->queue_command(write_minute_hour_command);
+#AC First Stop 3
+  - platform: template
+    id: first_stop_3
+    type: time
+    name: "AC First Stop 3"
+    optimistic: yes
+    on_value:
+      then:
+        - lambda: |-
+            uint8_t hours =  first_stop_3 -> hour;
+            uint8_t minutes = first_stop_3 -> minute;
+
+            uint16_t minuteshours = minutes << 8 | hours;
+            char str[2] = {minutes, hours};
+            ESP_LOGD("obama", str);
+            esphome::modbus_controller::ModbusCommandItem write_minute_hour_command = esphome::modbus_controller::ModbusCommandItem::create_write_single_command(inverter_1,157,minuteshours);
+            inverter_1->queue_command(write_minute_hour_command);
+
+time:
+  - platform: homeassistant
+    id: ha_time
+    on_time: 
+      seconds: 0
+      minutes: 0,15,30,45
+      then: 
+        - button.press: sync_time
+
+
+button:
+#Push time to the inverter, clock drift do be a thing
+  - platform: template
+    id: sync_time
+    name: "Sync Inverter Time"
+    on_press: 
+      then:
+        - lambda: |-
+            auto time = id(ha_time).now();
+            uint8_t month = time.month;
+            uint16_t year = time.year;
+            uint8_t hour = time.hour;
+            uint8_t day = time.day_of_month;
+            uint8_t second = time.second;
+            uint8_t minute = time.minute;
+
+            // Extract last two digits of the year
+            uint8_t yearLastTwoDigits = year % 100;  // 18
+
+            // Assemble the variables
+            uint16_t monthYear = (month << 8) | yearLastTwoDigits;
+            uint16_t hourDay = (hour << 8) | day;
+            uint16_t secondMinute = (second << 8) | minute;
+            //Assemble Modbus Commands
+            //Month/Year - 12
+            esphome::modbus_controller::ModbusCommandItem write_month_year_command = esphome::modbus_controller::ModbusCommandItem::create_write_single_command(inverter_1,12,monthYear);
+            inverter_1->queue_command(write_month_year_command);
+            //Day/Hour - 13
+            esphome::modbus_controller::ModbusCommandItem write_hour_day_command = esphome::modbus_controller::ModbusCommandItem::create_write_single_command(inverter_1,13,hourDay);
+            inverter_1->queue_command(write_hour_day_command);
+            //Minute/Sec - 14
+            esphome::modbus_controller::ModbusCommandItem write_min_sec_command = esphome::modbus_controller::ModbusCommandItem::create_write_single_command(inverter_1,14,secondMinute);
+            inverter_1->queue_command(write_min_sec_command);
+  
