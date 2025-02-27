@@ -12,10 +12,21 @@ logger:
 # Enable Home Assistant API
 api:
 
+# mqtt:
+#   broker: !secret mqtt_broker
+#   username: !secret mqtt_username
+#   password: !secret mqtt_password
+
 ota:
   - platform: esphome
-#Utilizing a Wireless Tag ESP-32
-#Read more here: https://github.com/egnor/wt32-eth01
+
+web_server:
+  log: false
+  version: 3
+  ota: False
+# Activates prometheus /metrics endpoint
+prometheus:
+
 ethernet:
   type: LAN8720
   mdc_pin: GPIO23
@@ -23,6 +34,12 @@ ethernet:
   clk_mode: GPIO0_IN
   phy_addr: 1
   power_pin: GPIO16
+  use_address: !secret inverter_1_static
+
+  manual_ip: 
+    gateway: 10.5.30.1
+    subnet: 255.255.255.0
+    static_ip: !secret inverter_1_static
 
 uart:
   - id: uart_modbus_inverter_1
@@ -35,10 +52,24 @@ modbus:
     id: modbus_inverter_1
 
 modbus_controller:
-  - address: 1
+  - id: inverter_1
+    address: 1
     update_interval: 5s
     modbus_id: modbus_inverter_1
-    id: inverter_1
+
+  
+  - id: inverter_1_slow
+    update_interval: 60s
+    modbus_id: modbus_inverter_1
+    address: 1
+
+binary_sensor:
+  - platform: modbus_controller
+    modbus_controller_id: inverter_1
+    name: "AC Couple Enabled"
+    register_type: read
+    address: 77
+    bitmask: 0x02 #(bit 8)
 
 sensor:
   - platform: internal_temperature
@@ -54,6 +85,7 @@ sensor:
     register_type: read
     address: 1
     unit_of_measurement: "V"
+    state_class: measurement
     accuracy_decimals: 2
     value_type: U_WORD
     filters: 
@@ -66,6 +98,7 @@ sensor:
     register_type: read
     address: 2
     unit_of_measurement: "V"
+    state_class: measurement
     accuracy_decimals: 2
     value_type: U_WORD
     filters: 
@@ -78,6 +111,7 @@ sensor:
     register_type: read
     address: 4
     unit_of_measurement: "V"
+    state_class: measurement
     accuracy_decimals: 2
     value_type: U_WORD
     filters: 
@@ -90,6 +124,7 @@ sensor:
     register_type: read
     address: 5
     unit_of_measurement: "%"
+    state_class: measurement
     device_class: battery
     value_type: U_WORD
   
@@ -100,6 +135,7 @@ sensor:
     register_type: read
     address: 7
     unit_of_measurement: "W"
+    state_class: measurement
     value_type: U_WORD
   
   - platform: modbus_controller
@@ -109,6 +145,7 @@ sensor:
     register_type: read
     address: 8
     unit_of_measurement: "W"
+    state_class: measurement
     value_type: U_WORD
   
   - platform: template
@@ -127,6 +164,7 @@ sensor:
     register_type: read
     address: 10
     unit_of_measurement: "W"
+    state_class: measurement
     value_type: U_WORD
 
   - platform: modbus_controller
@@ -136,6 +174,7 @@ sensor:
     register_type: read
     address: 11
     unit_of_measurement: "W"
+    state_class: measurement
     value_type: U_WORD
 
   - platform: template
@@ -145,6 +184,7 @@ sensor:
       return (id(bat_charge).state - id(bat_discharge).state);
     update_interval: 5s
     unit_of_measurement: "W"
+    state_class: measurement
     accuracy_decimals: 0
   
   - platform: modbus_controller
@@ -154,6 +194,7 @@ sensor:
     register_type: read
     address: 12
     unit_of_measurement: "V"
+    state_class: measurement
     accuracy_decimals: 2
     value_type: U_WORD
     filters: 
@@ -166,6 +207,7 @@ sensor:
     register_type: read
     address: 15
     unit_of_measurement: "Hz"
+    state_class: measurement
     accuracy_decimals: 2
     value_type: U_WORD
     filters:
@@ -178,8 +220,48 @@ sensor:
     register_type: read
     address: 27
     unit_of_measurement: "W"
+    state_class: measurement
     value_type: U_WORD
   
+  - platform: modbus_controller
+    modbus_controller_id: inverter_1_slow
+    name: "PV1 Production (Today)"
+    id: epv1_day
+    register_type: read
+    address: 28
+    unit_of_measurement: "kWh"
+    device_class: energy
+    state_class: total_increasing
+    accuracy_decimals: 2
+    value_type: U_WORD
+    filters: 
+      - multiply: 0.1
+
+  - platform: modbus_controller
+    modbus_controller_id: inverter_1_slow
+    name: "PV2 Production (Today)"
+    id: epv2_day
+    register_type: read
+    address: 29
+    unit_of_measurement: "kWh"
+    device_class: energy
+    state_class: total_increasing
+    accuracy_decimals: 2
+    value_type: U_WORD
+    filters: 
+      - multiply: 0.1
+
+  - platform: template
+    name: "PV Total Production (Today)"
+    id: epv_total_day
+    unit_of_measurement: "kWh"
+    device_class: energy
+    state_class: total_increasing
+    accuracy_decimals: 2
+    update_interval: 5s
+    lambda: |-
+      return (id(epv1_day).state + id(epv2_day).state);
+
   - platform: modbus_controller
     modbus_controller_id: inverter_1
     name: "AC Charge Power"
@@ -187,6 +269,7 @@ sensor:
     register_type: read
     address: 17
     unit_of_measurement: "W"
+    state_class: measurement
     value_type: U_WORD
 
   - platform: modbus_controller
@@ -196,6 +279,7 @@ sensor:
     register_type: read
     address: 20
     unit_of_measurement: "V"
+    state_class: measurement
     accuracy_decimals: 1
     value_type: U_WORD
     filters:
@@ -208,6 +292,7 @@ sensor:
     register_type: read
     address: 23
     unit_of_measurement: Hz
+    state_class: measurement
     accuracy_decimals: 2
     value_type: U_WORD
     filters:
@@ -220,64 +305,112 @@ sensor:
     register_type: read
     address: 24
     unit_of_measurement: W
+    state_class: measurement
     value_type: U_WORD
 
   - platform: modbus_controller
-    modbus_controller_id: inverter_1
+    modbus_controller_id: inverter_1_slow
+    name: "Power In Battery (Today)"
+    id: Echg_day
+    register_type: read
+    address: 33
+    unit_of_measurement: "kWh"
+    device_class: energy
+    state_class: total_increasing
+    accuracy_decimals: 2
+    value_type: U_WORD
+    filters: 
+      - multiply: 0.1
+
+  - platform: modbus_controller
+    modbus_controller_id: inverter_1_slow
+    name: "Power Out Battery (Today)"
+    id: Edischg_day
+    register_type: read
+    address: 34
+    unit_of_measurement: "kWh"
+    device_class: energy
+    state_class: total_increasing
+    accuracy_decimals: 2
+    value_type: U_WORD
+    filters: 
+      - multiply: 0.1
+
+  - platform: modbus_controller
+    modbus_controller_id: inverter_1_slow
+    name: "Power From Grid (Today)"
+    id: e_grid_today
+    register_type: read
+    address: 37
+    unit_of_measurement: "kWh"
+    device_class: energy
+    state_class: total_increasing
+    accuracy_decimals: 2
+    value_type: U_WORD
+    filters: 
+      - multiply: 0.1
+
+  - platform: modbus_controller
+    modbus_controller_id: inverter_1_slow
     name: "Temperature 1 Inverter"
     id: temp1_inv
     register_type: read
     address: 65
     device_class: temperature
+    state_class: measurement
     unit_of_measurement: "°C"
     value_type: U_WORD
   
   - platform: modbus_controller
-    modbus_controller_id: inverter_1
+    modbus_controller_id: inverter_1_slow
     name: "Temperature 2 Inverter"
     id: temp2_inv
     register_type: read
     address: 66
     device_class: temperature
+    state_class: measurement
     unit_of_measurement: "°C"
     value_type: U_WORD
 
   - platform: modbus_controller
-    modbus_controller_id: inverter_1
+    modbus_controller_id: inverter_1_slow
     name: "Temperature Battery"
     id: temp_battery
     register_type: read
     address: 67
     device_class: temperature
+    state_class: measurement
     unit_of_measurement: "°C"
     value_type: U_WORD   
 
   - platform: modbus_controller
-    modbus_controller_id: inverter_1
+    modbus_controller_id: inverter_1_slow
     name: "Max Charge Current BMS"
     id: max_charge_cur
     register_type: read
     address: 81
-    unit_of_measurement: Amps
+    unit_of_measurement: "A"
+    state_class: measurement
     value_type: U_WORD
     entity_category: diagnostic
     filters: 
       - multiply: 0.01
           
   - platform: modbus_controller
-    modbus_controller_id: inverter_1
+    modbus_controller_id: inverter_1_slow
     name: "Max Discharge Current BMS"
     id: max_discharge_current
     register_type: read
     address: 82
     unit_of_measurement: "A"
+    state_class: measurement
     entity_category: diagnostic
     value_type: U_WORD
     filters: 
       - multiply: 0.01
 
   - platform: modbus_controller
-    modbus_controller_id: inverter_1
+    modbus_controller_id: inverter_1_slow
     name: "Batteries in Parallel"
     id: bat_num_par
     register_type: read
@@ -286,46 +419,50 @@ sensor:
     entity_category: diagnostic
 
   - platform: modbus_controller
-    modbus_controller_id: inverter_1
+    modbus_controller_id: inverter_1_slow
     name: "Battery Capacity"
     id: bat_cap
     register_type: read
     address: 97
     unit_of_measurement: "Ah"
+    state_class: measurement
     value_type: U_WORD
     entity_category: diagnostic
 
   - platform: modbus_controller
-    modbus_controller_id: inverter_1
+    modbus_controller_id: inverter_1_slow
     name: "Battery Current BMS"
     id: bat_cur
     register_type: read
     address: 98
     unit_of_measurement: "A"
+    state_class: measurement
     value_type: S_WORD
     filters: 
       - multiply: 0.01
           
   - platform: modbus_controller
-    modbus_controller_id: inverter_1
+    modbus_controller_id: inverter_1_slow
     name: "Cell Max Temp"
     id: cell_max_temp
     register_type: read
     address: 103
     device_class: temperature
     unit_of_measurement: "°C"
+    state_class: measurement
     value_type: U_WORD
     filters: 
       - multiply: 0.1
 
   - platform: modbus_controller
-    modbus_controller_id: inverter_1
+    modbus_controller_id: inverter_1_slow
     name: "Cell Min Temp"
     id: cell_min_temp
     register_type: read
     address: 104
     device_class: temperature
     unit_of_measurement: "°C"
+    state_class: measurement
     value_type: U_WORD
     filters: 
       - multiply: 0.1   
@@ -339,6 +476,7 @@ sensor:
     accuracy_decimals: 1
     device_class: voltage
     unit_of_measurement: "V"
+    state_class: measurement
     value_type: U_WORD       
     filters: 
       - multiply: 0.1
@@ -352,6 +490,7 @@ sensor:
     accuracy_decimals: 1
     device_class: voltage
     unit_of_measurement: "V"
+    state_class: measurement
     value_type: U_WORD       
     filters: 
       - multiply: 0.1     
@@ -364,6 +503,7 @@ sensor:
     address: 129
     device_class: power
     unit_of_measurement: "W"
+    state_class: measurement
     value_type: U_WORD       
     filters: 
       - multiply: 1
@@ -376,9 +516,19 @@ sensor:
     address: 130
     device_class: power
     unit_of_measurement: "W"
+    state_class: measurement
     value_type: U_WORD       
     filters: 
       - multiply: 1
+
+  - platform: modbus_controller
+    modbus_controller_id: inverter_1
+    name: "AC Couple Power"
+    id: ac_couple_power
+    register_type: read
+    address: 153
+    unit_of_measurement: "W"
+    value_type: U_WORD    
 
 number:  
   - platform: modbus_controller
@@ -391,6 +541,30 @@ number:
     unit_of_measurement: "%"
     min_value: 1
     max_value: 90
+    step: 1
+
+  - platform: modbus_controller
+    modbus_controller_id: inverter_1
+    name: "EOD"
+    id: eod
+    register_type: holding
+    address: 105
+    value_type: U_WORD
+    unit_of_measurement: "%"
+    min_value: 10
+    max_value: 90
+    step: 1
+
+  - platform: modbus_controller
+    modbus_controller_id: inverter_1
+    name: "AC Charge Current"
+    id: ac_charge_cur
+    register_type: holding
+    address: 168
+    value_type: U_WORD
+    unit_of_measurement: "A"
+    min_value: 0
+    max_value: 125
     step: 1
 
   - platform: modbus_controller
@@ -418,17 +592,6 @@ number:
     max_value: 100
     step: 1
 
-  - platform: modbus_controller
-    modbus_controller_id: inverter_1
-    name: "AC Charge Current"
-    id: ac_charge_cur
-    register_type: holding
-    address: 168
-    value_type: U_WORD
-    unit_of_measurement: "A"
-    min_value: 0
-    max_value: 125
-    step: 1
 
 text_sensor:
 #Get the Inverter Time - Diagnostics Only - Comment out when not needed
@@ -881,25 +1044,26 @@ text_sensor:
     response_size: 2
     raw_encode: NONE
     entity_category: diagnostic
-  
-  - platform: modbus_controller
-    modbus_controller_id: inverter_1
-    name: "Test_Poke"
-    id: test_number
-    raw_encode: HEXBYTES
-    register_type: holding
-    address: 21
 
-  - platform: modbus_controller
-    modbus_controller_id: inverter_1
-    name: "Inverter Serial Number"
-    id: serial_num
-    register_type: read
-    address: 115
-    register_count: 5
-    response_size: 9
-    entity_category: diagnostic
-
+# #Testing things and Stuff here  
+#   - platform: modbus_controller
+#     modbus_controller_id: inverter_1
+#     name: "Test_Poke"
+#     id: test_number
+#     raw_encode: HEXBYTES
+#     register_type: holding
+#     address: 21
+#Serial Number Decoder
+  # - platform: modbus_controller
+  #   modbus_controller_id: inverter_1
+  #   name: "Inverter Serial Number"
+  #   id: serial_num
+  #   register_type: read
+  #   address: 115
+  #   register_count: 5
+  #   response_size: 9
+  #   entity_category: diagnostic
+#Working Mode Decoder
   - platform: modbus_controller
     modbus_controller_id: inverter_1
     name: "Working Mode"
@@ -942,14 +1106,36 @@ datetime:
     on_value:
       then:
         - lambda: |-
-            uint8_t hours =  charge_start_1 -> hour;
-            uint8_t minutes = charge_start_1 -> minute;
+            // Centralized Definitions
+              auto &modbus_time_sensor = id(ac_charge_pri_start_1);
+              auto &new_time_sensor = id(charge_start_1);
+              const uint16_t modbus_register = 68;
 
-            uint16_t minuteshours = minutes << 8 | hours;
-            char str[2] = {minutes, hours};
-            ESP_LOGD("obama 2", str);
-            esphome::modbus_controller::ModbusCommandItem write_minute_hour_command = esphome::modbus_controller::ModbusCommandItem::create_write_single_command(inverter_1,68,minuteshours);
-            inverter_1->queue_command(write_minute_hour_command);
+            // Get current time from text sensor (Modbus register)
+              std::string modbus_time = modbus_time_sensor -> state;
+
+            // Get new time from datetime sensor
+              char new_time[9];
+              snprintf(new_time, sizeof(new_time), "%02d:%02d:%02d", new_time_sensor -> hour, new_time_sensor -> minute, 0);
+
+            // Compare times
+              std::string new_time_str(new_time);
+              if (modbus_time.compare(new_time_str) != 0) {
+            // Times are different, write to Modbus
+                uint8_t hours = new_time_sensor -> hour;
+                uint8_t minutes = new_time_sensor -> minute;
+
+                uint16_t minuteshours = (minutes << 8) | hours;
+                ESP_LOGD("Modbus Write", "Writing new time to Modbus - Hours: %d, Minutes: %d", hours, minutes);
+
+                auto write_command = esphome::modbus_controller::ModbusCommandItem::create_write_single_command(
+                  inverter_1, modbus_register, minuteshours);
+                inverter_1->queue_command(write_command);
+            } else {
+             // Times are the same, no action needed
+                ESP_LOGD("Modbus Write", "Time unchanged, no write performed");
+            }
+
 #AC Charge Stop 1
   - platform: template
     id: charge_stop_1
@@ -960,14 +1146,36 @@ datetime:
     on_value:
       then:
         - lambda: |-
-            uint8_t hours =  charge_stop_1 -> hour;
-            uint8_t minutes = charge_stop_1 -> minute;
+            // Centralized Definitions
+              auto &modbus_time_sensor = id(ac_charge_pri_end_1);
+              auto &new_time_sensor = id(charge_stop_1);
+              const uint16_t modbus_register = 69;
 
-            uint16_t minuteshours = minutes << 8 | hours;
-            char str[2] = {minutes, hours};
-            ESP_LOGD("obama", str);
-            esphome::modbus_controller::ModbusCommandItem write_minute_hour_command = esphome::modbus_controller::ModbusCommandItem::create_write_single_command(inverter_1,69,minuteshours);
-            inverter_1->queue_command(write_minute_hour_command);
+            // Get current time from text sensor (Modbus register)
+              std::string modbus_time = modbus_time_sensor -> state;
+
+            // Get new time from datetime sensor
+              char new_time[9];
+              snprintf(new_time, sizeof(new_time), "%02d:%02d:%02d", new_time_sensor -> hour, new_time_sensor -> minute, 0);
+
+            // Compare times
+              std::string new_time_str(new_time);
+              if (modbus_time.compare(new_time_str) != 0) {
+            // Times are different, write to Modbus
+                uint8_t hours = new_time_sensor -> hour;
+                uint8_t minutes = new_time_sensor -> minute;
+
+                uint16_t minuteshours = (minutes << 8) | hours;
+                ESP_LOGD("Modbus Write", "Writing new time to Modbus - Hours: %d, Minutes: %d", hours, minutes);
+
+                auto write_command = esphome::modbus_controller::ModbusCommandItem::create_write_single_command(
+                  inverter_1, modbus_register, minuteshours);
+                inverter_1->queue_command(write_command);
+            } else {
+             // Times are the same, no action needed
+                ESP_LOGD("Modbus Write", "Time unchanged, no write performed");
+            }
+
 #AC Charge Start 2
   - platform: template
     id: charge_start_2
@@ -978,14 +1186,36 @@ datetime:
     on_value:
       then:
         - lambda: |-
-            uint8_t hours =  charge_start_2 -> hour;
-            uint8_t minutes = charge_start_2 -> minute;
+            // Centralized Definitions
+              auto &modbus_time_sensor = id(ac_charge_pri_start_2);
+              auto &new_time_sensor = id(charge_start_2);
+              const uint16_t modbus_register = 70;
 
-            uint16_t minuteshours = minutes << 8 | hours;
-            char str[2] = {minutes, hours};
-            ESP_LOGD("obama 2", str);
-            esphome::modbus_controller::ModbusCommandItem write_minute_hour_command = esphome::modbus_controller::ModbusCommandItem::create_write_single_command(inverter_1,70,minuteshours);
-            inverter_1->queue_command(write_minute_hour_command);
+            // Get current time from text sensor (Modbus register)
+              std::string modbus_time = modbus_time_sensor -> state;
+
+            // Get new time from datetime sensor
+              char new_time[9];
+              snprintf(new_time, sizeof(new_time), "%02d:%02d:%02d", new_time_sensor -> hour, new_time_sensor -> minute, 0);
+
+            // Compare times
+              std::string new_time_str(new_time);
+              if (modbus_time.compare(new_time_str) != 0) {
+            // Times are different, write to Modbus
+                uint8_t hours = new_time_sensor -> hour;
+                uint8_t minutes = new_time_sensor -> minute;
+
+                uint16_t minuteshours = (minutes << 8) | hours;
+                ESP_LOGD("Modbus Write", "Writing new time to Modbus - Hours: %d, Minutes: %d", hours, minutes);
+
+                auto write_command = esphome::modbus_controller::ModbusCommandItem::create_write_single_command(
+                  inverter_1, modbus_register, minuteshours);
+                inverter_1->queue_command(write_command);
+            } else {
+             // Times are the same, no action needed
+                ESP_LOGD("Modbus Write", "Time unchanged, no write performed");
+            }
+
 #AC Charge Stop 2
   - platform: template
     id: charge_stop_2
@@ -996,14 +1226,36 @@ datetime:
     on_value:
       then:
         - lambda: |-
-            uint8_t hours =  charge_stop_2 -> hour;
-            uint8_t minutes = charge_stop_2 -> minute;
+            // Centralized Definitions
+              auto &modbus_time_sensor = id(ac_charge_pri_end_2);
+              auto &new_time_sensor = id(charge_stop_2);
+              const uint16_t modbus_register = 71;
 
-            uint16_t minuteshours = minutes << 8 | hours;
-            char str[2] = {minutes, hours};
-            ESP_LOGD("obama", str);
-            esphome::modbus_controller::ModbusCommandItem write_minute_hour_command = esphome::modbus_controller::ModbusCommandItem::create_write_single_command(inverter_1,71,minuteshours);
-            inverter_1->queue_command(write_minute_hour_command);
+            // Get current time from text sensor (Modbus register)
+              std::string modbus_time = modbus_time_sensor -> state;
+
+            // Get new time from datetime sensor
+              char new_time[9];
+              snprintf(new_time, sizeof(new_time), "%02d:%02d:%02d", new_time_sensor -> hour, new_time_sensor -> minute, 0);
+
+            // Compare times
+              std::string new_time_str(new_time);
+              if (modbus_time.compare(new_time_str) != 0) {
+            // Times are different, write to Modbus
+                uint8_t hours = new_time_sensor -> hour;
+                uint8_t minutes = new_time_sensor -> minute;
+
+                uint16_t minuteshours = (minutes << 8) | hours;
+                ESP_LOGD("Modbus Write", "Writing new time to Modbus - Hours: %d, Minutes: %d", hours, minutes);
+
+                auto write_command = esphome::modbus_controller::ModbusCommandItem::create_write_single_command(
+                  inverter_1, modbus_register, minuteshours);
+                inverter_1->queue_command(write_command);
+            } else {
+             // Times are the same, no action needed
+                ESP_LOGD("Modbus Write", "Time unchanged, no write performed");
+            }   
+            
 #AC Charge Start 3
   - platform: template
     id: charge_start_3
@@ -1014,14 +1266,35 @@ datetime:
     on_value:
       then:
         - lambda: |-
-            uint8_t hours =  charge_start_3 -> hour;
-            uint8_t minutes = charge_start_3 -> minute;
+            // Centralized Definitions
+              auto &modbus_time_sensor = id(ac_charge_pri_start_3);
+              auto &new_time_sensor = id(charge_start_3);
+              const uint16_t modbus_register = 72;
+            // Get current time from text sensor (Modbus register)
+              std::string modbus_time = modbus_time_sensor -> state;
 
-            uint16_t minuteshours = minutes << 8 | hours;
-            char str[2] = {minutes, hours};
-            ESP_LOGD("obama 2", str);
-            esphome::modbus_controller::ModbusCommandItem write_minute_hour_command = esphome::modbus_controller::ModbusCommandItem::create_write_single_command(inverter_1,72,minuteshours);
-            inverter_1->queue_command(write_minute_hour_command);
+            // Get new time from datetime sensor
+              char new_time[9];
+              snprintf(new_time, sizeof(new_time), "%02d:%02d:%02d", new_time_sensor -> hour, new_time_sensor -> minute, 0);
+
+            // Compare times
+              std::string new_time_str(new_time);
+              if (modbus_time.compare(new_time_str) != 0) {
+            // Times are different, write to Modbus
+                uint8_t hours = new_time_sensor -> hour;
+                uint8_t minutes = new_time_sensor -> minute;
+
+                uint16_t minuteshours = (minutes << 8) | hours;
+                ESP_LOGD("Modbus Write", "Writing new time to Modbus - Hours: %d, Minutes: %d", hours, minutes);
+
+                auto write_command = esphome::modbus_controller::ModbusCommandItem::create_write_single_command(
+                  inverter_1, modbus_register, minuteshours);
+                inverter_1->queue_command(write_command);
+            } else {
+             // Times are the same, no action needed
+                ESP_LOGD("Modbus Write", "Time unchanged, no write performed");
+            }
+
 #AC Charge Stop 3
   - platform: template
     id: charge_stop_3
@@ -1032,123 +1305,346 @@ datetime:
     on_value:
       then:
         - lambda: |-
-            uint8_t hours =  charge_stop_3 -> hour;
-            uint8_t minutes = charge_stop_3 -> minute;
+            // Centralized Definitions
+              auto &modbus_time_sensor = id(ac_charge_pri_end_3);
+              auto &new_time_sensor = id(charge_stop_3);
+              const uint16_t modbus_register = 73;
 
-            uint16_t minuteshours = minutes << 8 | hours;
-            char str[2] = {minutes, hours};
-            ESP_LOGD("obama", str);
-            esphome::modbus_controller::ModbusCommandItem write_minute_hour_command = esphome::modbus_controller::ModbusCommandItem::create_write_single_command(inverter_1,73,minuteshours);
-            inverter_1->queue_command(write_minute_hour_command);
+            // Get current time from text sensor (Modbus register)
+              std::string modbus_time = modbus_time_sensor -> state;
+
+            // Get new time from datetime sensor
+              char new_time[9];
+              snprintf(new_time, sizeof(new_time), "%02d:%02d:%02d", new_time_sensor -> hour, new_time_sensor -> minute, 0);
+
+            // Compare times
+              std::string new_time_str(new_time);
+              if (modbus_time.compare(new_time_str) != 0) {
+            // Times are different, write to Modbus
+                uint8_t hours = new_time_sensor -> hour;
+                uint8_t minutes = new_time_sensor -> minute;
+
+                uint16_t minuteshours = (minutes << 8) | hours;
+                ESP_LOGD("Modbus Write", "Writing new time to Modbus - Hours: %d, Minutes: %d", hours, minutes);
+
+                auto write_command = esphome::modbus_controller::ModbusCommandItem::create_write_single_command(
+                  inverter_1, modbus_register, minuteshours);
+                inverter_1->queue_command(write_command);
+            } else {
+             // Times are the same, no action needed
+                ESP_LOGD("Modbus Write", "Time unchanged, no write performed");
+            }
+
 #AC First Start 1
   - platform: template
     id: first_start_1
     type: time
     name: "AC First Start 1"
     optimistic: yes
+    restore_value: true
     on_value:
       then:
         - lambda: |-
-            uint8_t hours =  first_start_1 -> hour;
-            uint8_t minutes = first_start_1 -> minute;
+            // Centralized Definitions
+              auto &modbus_time_sensor = id(ac_first_pri_start_1);
+              auto &new_time_sensor = id(first_start_1);
+              const uint16_t modbus_register = 152;
 
-            uint16_t minuteshours = minutes << 8 | hours;
-            char str[2] = {minutes, hours};
-            ESP_LOGD("obama", str);
-            esphome::modbus_controller::ModbusCommandItem write_minute_hour_command = esphome::modbus_controller::ModbusCommandItem::create_write_single_command(inverter_1,152,minuteshours);
-            inverter_1->queue_command(write_minute_hour_command);
+            // Get current time from text sensor (Modbus register)
+              std::string modbus_time = modbus_time_sensor -> state;
+
+            // Get new time from datetime sensor
+              char new_time[9];
+              snprintf(new_time, sizeof(new_time), "%02d:%02d:%02d", new_time_sensor -> hour, new_time_sensor -> minute, 0);
+
+            // Compare times
+              std::string new_time_str(new_time);
+              if (modbus_time.compare(new_time_str) != 0) {
+            // Times are different, write to Modbus
+                uint8_t hours = new_time_sensor -> hour;
+                uint8_t minutes = new_time_sensor -> minute;
+
+                uint16_t minuteshours = (minutes << 8) | hours;
+                ESP_LOGD("Modbus Write", "Writing new time to Modbus - Hours: %d, Minutes: %d", hours, minutes);
+
+                auto write_command = esphome::modbus_controller::ModbusCommandItem::create_write_single_command(
+                  inverter_1, modbus_register, minuteshours);
+                inverter_1->queue_command(write_command);
+            } else {
+             // Times are the same, no action needed
+                ESP_LOGD("Modbus Write", "Time unchanged, no write performed");
+            }
+
+        # - lambda: |-
+        #     uint8_t hours =  first_start_1 -> hour;
+        #     uint8_t minutes = first_start_1 -> minute;
+
+        #     uint16_t minuteshours = minutes << 8 | hours;
+        #     char str[2] = {minutes, hours};
+        #     ESP_LOGD("obama", str);
+        #     esphome::modbus_controller::ModbusCommandItem write_minute_hour_command = esphome::modbus_controller::ModbusCommandItem::create_write_single_command(inverter_1,152,minuteshours);
+        #     inverter_1->queue_command(write_minute_hour_command);
+
 #AC First Stop 1
   - platform: template
     id: first_stop_1
     type: time
     name: "AC First Stop 1"
     optimistic: yes
+    restore_value: true
     on_value:
       then:
         - lambda: |-
-            uint8_t hours =  first_stop_1 -> hour;
-            uint8_t minutes = first_stop_1 -> minute;
+            // Centralized Definitions
+              auto &modbus_time_sensor = id(ac_first_pri_end_1);
+              auto &new_time_sensor = id(first_stop_1);
+              const uint16_t modbus_register = 153;
 
-            uint16_t minuteshours = minutes << 8 | hours;
-            char str[2] = {minutes, hours};
-            ESP_LOGD("obama", str);
-            esphome::modbus_controller::ModbusCommandItem write_minute_hour_command = esphome::modbus_controller::ModbusCommandItem::create_write_single_command(inverter_1,153,minuteshours);
-            inverter_1->queue_command(write_minute_hour_command);
+            // Get current time from text sensor (Modbus register)
+              std::string modbus_time = modbus_time_sensor -> state;
+
+            // Get new time from datetime sensor
+              char new_time[9];
+              snprintf(new_time, sizeof(new_time), "%02d:%02d:%02d", new_time_sensor -> hour, new_time_sensor -> minute, 0);
+
+            // Compare times
+              std::string new_time_str(new_time);
+              if (modbus_time.compare(new_time_str) != 0) {
+            // Times are different, write to Modbus
+                uint8_t hours = new_time_sensor -> hour;
+                uint8_t minutes = new_time_sensor -> minute;
+
+                uint16_t minuteshours = (minutes << 8) | hours;
+                ESP_LOGD("Modbus Write", "Writing new time to Modbus - Hours: %d, Minutes: %d", hours, minutes);
+
+                auto write_command = esphome::modbus_controller::ModbusCommandItem::create_write_single_command(
+                  inverter_1, modbus_register, minuteshours);
+                inverter_1->queue_command(write_command);
+            } else {
+             // Times are the same, no action needed
+                ESP_LOGD("Modbus Write", "Time unchanged, no write performed");
+            }
+
+        # - lambda: |-
+        #     uint8_t hours =  first_stop_1 -> hour;
+        #     uint8_t minutes = first_stop_1 -> minute;
+
+        #     uint16_t minuteshours = minutes << 8 | hours;
+        #     char str[2] = {minutes, hours};
+        #     ESP_LOGD("obama", str);
+        #     esphome::modbus_controller::ModbusCommandItem write_minute_hour_command = esphome::modbus_controller::ModbusCommandItem::create_write_single_command(inverter_1,153,minuteshours);
+        #     inverter_1->queue_command(write_minute_hour_command);
+
 # AC First Start 2
   - platform: template
     id: first_start_2
     type: time
     name: "AC First Start 2"
     optimistic: yes
+    restore_value: true
     on_value:
       then:
         - lambda: |-
-            uint8_t hours =  first_start_2 -> hour;
-            uint8_t minutes = first_start_2 -> minute;
+            // Centralized Definitions
+              auto &modbus_time_sensor = id(ac_first_pri_start_2);
+              auto &new_time_sensor = id(first_start_2);
+              const uint16_t modbus_register = 154;
 
-            uint16_t minuteshours = minutes << 8 | hours;
-            char str[2] = {minutes, hours};
-            ESP_LOGD("obama", str);
-            esphome::modbus_controller::ModbusCommandItem write_minute_hour_command = esphome::modbus_controller::ModbusCommandItem::create_write_single_command(inverter_1,154,minuteshours);
-            inverter_1->queue_command(write_minute_hour_command);
+            // Get current time from text sensor (Modbus register)
+              std::string modbus_time = modbus_time_sensor -> state;
+
+            // Get new time from datetime sensor
+              char new_time[9];
+              snprintf(new_time, sizeof(new_time), "%02d:%02d:%02d", new_time_sensor -> hour, new_time_sensor -> minute, 0);
+
+            // Compare times
+              std::string new_time_str(new_time);
+              if (modbus_time.compare(new_time_str) != 0) {
+            // Times are different, write to Modbus
+                uint8_t hours = new_time_sensor -> hour;
+                uint8_t minutes = new_time_sensor -> minute;
+
+                uint16_t minuteshours = (minutes << 8) | hours;
+                ESP_LOGD("Modbus Write", "Writing new time to Modbus - Hours: %d, Minutes: %d", hours, minutes);
+
+                auto write_command = esphome::modbus_controller::ModbusCommandItem::create_write_single_command(
+                  inverter_1, modbus_register, minuteshours);
+                inverter_1->queue_command(write_command);
+            } else {
+             // Times are the same, no action needed
+                ESP_LOGD("Modbus Write", "Time unchanged, no write performed");
+            }
+
+        # - lambda: |-
+        #     uint8_t hours =  first_start_2 -> hour;
+        #     uint8_t minutes = first_start_2 -> minute;
+
+        #     uint16_t minuteshours = minutes << 8 | hours;
+        #     char str[2] = {minutes, hours};
+        #     ESP_LOGD("obama", str);
+        #     esphome::modbus_controller::ModbusCommandItem write_minute_hour_command = esphome::modbus_controller::ModbusCommandItem::create_write_single_command(inverter_1,154,minuteshours);
+        #     inverter_1->queue_command(write_minute_hour_command);
+
 # AC First Stop 2
   - platform: template
     id: first_stop_2
     type: time
     name: "AC First Stop 2"
     optimistic: yes
+    restore_value: true
     on_value:
       then:
         - lambda: |-
-            uint8_t hours =  first_stop_2 -> hour;
-            uint8_t minutes = first_stop_2 -> minute;
+            // Centralized Definitions
+              auto &modbus_time_sensor = id(ac_first_pri_end_2);
+              auto &new_time_sensor = id(first_stop_2);
+              const uint16_t modbus_register = 155;
 
-            uint16_t minuteshours = minutes << 8 | hours;
-            char str[2] = {minutes, hours};
-            ESP_LOGD("obama", str);
-            esphome::modbus_controller::ModbusCommandItem write_minute_hour_command = esphome::modbus_controller::ModbusCommandItem::create_write_single_command(inverter_1,155,minuteshours);
-            inverter_1->queue_command(write_minute_hour_command);
+            // Get current time from text sensor (Modbus register)
+              std::string modbus_time = modbus_time_sensor -> state;
+
+            // Get new time from datetime sensor
+              char new_time[9];
+              snprintf(new_time, sizeof(new_time), "%02d:%02d:%02d", new_time_sensor -> hour, new_time_sensor -> minute, 0);
+
+            // Compare times
+              std::string new_time_str(new_time);
+              if (modbus_time.compare(new_time_str) != 0) {
+            // Times are different, write to Modbus
+                uint8_t hours = new_time_sensor -> hour;
+                uint8_t minutes = new_time_sensor -> minute;
+
+                uint16_t minuteshours = (minutes << 8) | hours;
+                ESP_LOGD("Modbus Write", "Writing new time to Modbus - Hours: %d, Minutes: %d", hours, minutes);
+
+                auto write_command = esphome::modbus_controller::ModbusCommandItem::create_write_single_command(
+                  inverter_1, modbus_register, minuteshours);
+                inverter_1->queue_command(write_command);
+            } else {
+             // Times are the same, no action needed
+                ESP_LOGD("Modbus Write", "Time unchanged, no write performed");
+            }
+
+        # - lambda: |-
+        #     uint8_t hours =  first_stop_2 -> hour;
+        #     uint8_t minutes = first_stop_2 -> minute;
+
+        #     uint16_t minuteshours = minutes << 8 | hours;
+        #     char str[2] = {minutes, hours};
+        #     ESP_LOGD("obama", str);
+        #     esphome::modbus_controller::ModbusCommandItem write_minute_hour_command = esphome::modbus_controller::ModbusCommandItem::create_write_single_command(inverter_1,155,minuteshours);
+        #     inverter_1->queue_command(write_minute_hour_command);
+
 #AC First Start 3
   - platform: template
     id: first_start_3
     type: time
     name: "AC First Start 3"
     optimistic: yes
+    restore_value: true
     on_value:
       then:
         - lambda: |-
-            uint8_t hours =  first_start_3 -> hour;
-            uint8_t minutes = first_start_3 -> minute;
+            // Centralized Definitions
+              auto &modbus_time_sensor = id(ac_first_pri_start_3);
+              auto &new_time_sensor = id(first_start_3);
+              const uint16_t modbus_register = 156;
 
-            uint16_t minuteshours = minutes << 8 | hours;
-            char str[2] = {minutes, hours};
-            ESP_LOGD("obama", str);
-            esphome::modbus_controller::ModbusCommandItem write_minute_hour_command = esphome::modbus_controller::ModbusCommandItem::create_write_single_command(inverter_1,156,minuteshours);
-            inverter_1->queue_command(write_minute_hour_command);
+            // Get current time from text sensor (Modbus register)
+              std::string modbus_time = modbus_time_sensor -> state;
+
+            // Get new time from datetime sensor
+              char new_time[9];
+              snprintf(new_time, sizeof(new_time), "%02d:%02d:%02d", new_time_sensor -> hour, new_time_sensor -> minute, 0);
+
+            // Compare times
+              std::string new_time_str(new_time);
+              if (modbus_time.compare(new_time_str) != 0) {
+            // Times are different, write to Modbus
+                uint8_t hours = new_time_sensor -> hour;
+                uint8_t minutes = new_time_sensor -> minute;
+
+                uint16_t minuteshours = (minutes << 8) | hours;
+                ESP_LOGD("Modbus Write", "Writing new time to Modbus - Hours: %d, Minutes: %d", hours, minutes);
+
+                auto write_command = esphome::modbus_controller::ModbusCommandItem::create_write_single_command(
+                  inverter_1, modbus_register, minuteshours);
+                inverter_1->queue_command(write_command);
+            } else {
+             // Times are the same, no action needed
+                ESP_LOGD("Modbus Write", "Time unchanged, no write performed");
+            }
+
+        # - lambda: |-
+        #     uint8_t hours =  first_start_3 -> hour;
+        #     uint8_t minutes = first_start_3 -> minute;
+
+        #     uint16_t minuteshours = minutes << 8 | hours;
+        #     char str[2] = {minutes, hours};
+        #     ESP_LOGD("obama", str);
+        #     esphome::modbus_controller::ModbusCommandItem write_minute_hour_command = esphome::modbus_controller::ModbusCommandItem::create_write_single_command(inverter_1,156,minuteshours);
+        #     inverter_1->queue_command(write_minute_hour_command);
+
 #AC First Stop 3
   - platform: template
     id: first_stop_3
     type: time
     name: "AC First Stop 3"
     optimistic: yes
+    restore_value: true
     on_value:
       then:
         - lambda: |-
-            uint8_t hours =  first_stop_3 -> hour;
-            uint8_t minutes = first_stop_3 -> minute;
+            // Centralized Definitions
+              auto &modbus_time_sensor = id(ac_first_pri_end_3);
+              auto &new_time_sensor = id(first_stop_3);
+              const uint16_t modbus_register = 157;
 
-            uint16_t minuteshours = minutes << 8 | hours;
-            char str[2] = {minutes, hours};
-            ESP_LOGD("obama", str);
-            esphome::modbus_controller::ModbusCommandItem write_minute_hour_command = esphome::modbus_controller::ModbusCommandItem::create_write_single_command(inverter_1,157,minuteshours);
-            inverter_1->queue_command(write_minute_hour_command);
+            // Get current time from text sensor (Modbus register)
+              std::string modbus_time = modbus_time_sensor -> state;
+
+            // Get new time from datetime sensor
+              char new_time[9];
+              snprintf(new_time, sizeof(new_time), "%02d:%02d:%02d", new_time_sensor -> hour, new_time_sensor -> minute, 0);
+
+            // Compare times
+              std::string new_time_str(new_time);
+              if (modbus_time.compare(new_time_str) != 0) {
+            // Times are different, write to Modbus
+                uint8_t hours = new_time_sensor -> hour;
+                uint8_t minutes = new_time_sensor -> minute;
+
+                uint16_t minuteshours = (minutes << 8) | hours;
+                ESP_LOGD("Modbus Write", "Writing new time to Modbus - Hours: %d, Minutes: %d", hours, minutes);
+
+                auto write_command = esphome::modbus_controller::ModbusCommandItem::create_write_single_command(
+                  inverter_1, modbus_register, minuteshours);
+                inverter_1->queue_command(write_command);
+            } else {
+             // Times are the same, no action needed
+                ESP_LOGD("Modbus Write", "Time unchanged, no write performed");
+            }
+
+        # - lambda: |-
+        #     uint8_t hours =  first_stop_3 -> hour;
+        #     uint8_t minutes = first_stop_3 -> minute;
+
+        #     uint16_t minuteshours = minutes << 8 | hours;
+        #     char str[2] = {minutes, hours};
+        #     ESP_LOGD("obama", str);
+        #     esphome::modbus_controller::ModbusCommandItem write_minute_hour_command = esphome::modbus_controller::ModbusCommandItem::create_write_single_command(inverter_1,157,minuteshours);
+        #     inverter_1->queue_command(write_minute_hour_command);
 
 time:
-  - platform: homeassistant
+  - platform: sntp
     id: ha_time
+    timezone: America/Denver
+    servers:
+      - 10.6.10.5
+      - 10.6.10.4
     on_time: 
       seconds: 0
-      minutes: 0,15,30,45
+      minutes: 0
       then: 
         - button.press: sync_time
 
@@ -1186,4 +1682,3 @@ button:
             //Minute/Sec - 14
             esphome::modbus_controller::ModbusCommandItem write_min_sec_command = esphome::modbus_controller::ModbusCommandItem::create_write_single_command(inverter_1,14,secondMinute);
             inverter_1->queue_command(write_min_sec_command);
-  
