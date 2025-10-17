@@ -1,0 +1,1196 @@
+#YAML writen to use this ESP32 module: https://www.waveshare.com/esp32-s3-eth.htm
+esphome:
+  name: ctn1-battery-can
+  friendly_name: CTN1-Battery-CAN
+  platformio_options:
+    build_flags:
+      - -DN_PACKS=4   
+
+substitutions:
+  name: "bms_can_gateway"
+  PACK_TIMEOUT_MS: "5000"
+        
+esp32:
+  board: esp32-s3-devkitc-1
+  framework:
+    type: esp-idf
+
+logger:
+  level: DEBUG
+  logs:
+    canbus: WARN
+    sensor: WARN
+    text_sensor: WARN
+    binary_sensor: WARN
+
+web_server:
+  
+prometheus:
+
+api:
+
+ota:
+
+ethernet:
+  type: W5500
+  clk_pin: GPIO13
+  mosi_pin: GPIO11
+  miso_pin: GPIO12
+  cs_pin: GPIO14
+  interrupt_pin: GPIO10
+  reset_pin: GPIO9
+  use_address: !secret battery_can_mon
+  manual_ip: 
+    static_ip: !secret battery_can_mon
+    subnet: !secret subnet
+    gateway: !secret gateway
+    dns1: !secret dns1
+    dns2: !secret dns2
+
+canbus:
+  - platform: esp32_can
+    tx_pin: GPIO43
+    rx_pin: GPIO44
+    can_id: 4
+    id: can0
+    bit_rate: 500kbps
+    on_frame:
+      - can_id: 0x000
+        can_id_mask: 0x000
+        then:
+          - lambda: |-
+              const uint16_t fid = can_id;
+              auto &d = x;                       // x is std::vector<uint8_t>
+              const uint32_t now = millis();
+
+              auto le16 = [&](int i) -> uint16_t {
+                return (uint16_t)d[i] | ((uint16_t)d[i + 1] << 8);
+              };
+              auto le16_signed = [&](int i) -> int16_t {
+                return (int16_t)((uint16_t)d[i] | ((uint16_t)d[i + 1] << 8));
+              };
+              auto slot = [&](uint16_t base)->int {
+                int j = (int)fid - (int)base;
+                return (j >= 0 && j < N_PACKS) ? (j & 0x3) : -1;
+              };
+
+              // ---------- 0x300 range (Pylon) ----------
+              if (fid == 0x305) {  // heartbeat
+                id(last_heartbeat) = now;
+              }
+
+              // 0x351 Bank limits (V/I_chg/I_dchg + V_dchg_min at B6-7). Do NOT set bank_cap_ah here.
+              if (fid == 0x351 && d.size() >= 8) {
+                id(bank_v_chg_max)  = le16(0) / 10.0f;   // 0.1 V
+                id(bank_i_chg_lim)  = le16(2) / 10.0f;   // 0.1 A
+                id(bank_i_dchg_lim) = le16(4) / 10.0f;   // 0.1 A
+                // uint16_t v_dchg_min_dV = le16(6);     // optional
+              }
+
+              // 0x355 Bank SOC/SOH (u16/u16) + optional cell mV extrema in 4..7
+              if (fid == 0x355 && d.size() >= 4) {
+                id(bank_soc_pct) = le16(0);
+                id(bank_soh_pct) = le16(2);
+                if (d.size() >= 8) {
+                  id(bank_cell_mv_max) = le16(4);
+                  id(bank_cell_mv_min) = le16(6);
+                }
+              }
+
+              // 0x356 Bank V/I/Tavg
+              if (fid == 0x356 && d.size() >= 6) {
+                id(bank_v_pack) = le16(0) / 100.0f;      // 0.01 V
+                id(bank_i_pack) = le16_signed(2) * 0.1f; // 0.1 A signed
+                id(bank_t_avg)  = le16(4) / 10.0f;       // 0.1 °C
+                if (d.size() >= 8) {
+                  id(bank_t_min) = le16(6) / 10.0f;      // optional
+                }
+              }
+
+              // 0x359 Bank alarms + pack count (V1.2)
+              if (fid == 0x359 && d.size() >= 5) {
+                id(bank_alarms) = ((uint32_t)d[3] << 24) | ((uint32_t)d[2] << 16) |
+                                  ((uint32_t)d[1] << 8)  |  (uint32_t)d[0];
+                id(bank_pack_count) = d[4];
+
+                // Fallback capacity if 0x35F not seen yet
+                if (id(bank_cap_ah) == 0) {
+                  const uint16_t MODULE_AH_DEFAULT = 100;   // adjust per module
+                  id(bank_cap_ah) = (uint16_t)(MODULE_AH_DEFAULT * id(bank_pack_count));
+                }
+              }
+
+              // 0x35C Bank request flags (V1.2)
+              if (fid == 0x35C && d.size() >= 2) {
+                id(bank_status_flags) = le16(0);
+              }
+
+              // 0x35F Battery/BMS info (V1.3): bytes 4–5 = capacity (vendor variants: Ah or Ah×10)
+              if (fid == 0x35F && d.size() >= 6) {
+                const uint16_t raw = le16(4);
+
+                auto interpret_cap_ah = [&](uint16_t v) -> float {
+                  // Heuristic: some stacks send Ah×10. Treat big/round numbers as scaled.
+                  // Examples: 3980 -> 398.0 Ah, 2800 -> 280.0 Ah. Otherwise assume Ah.
+                  if (v >= 2000) return v / 10.0f;
+                  if ((v % 10) == 0 && (v / 10) >= 50) return v / 10.0f;
+                  return (float)v;
+                };
+
+                const float cap = interpret_cap_ah(raw);
+                if (cap > 0.0f && cap < 5000.0f) id(bank_cap_ah) = cap;
+              }
+
+              // 0x35A Alarms/Warnings (V1.3) - populate pyl35a_*
+              if (fid == 0x35A && d.size() >= 4) {
+                id(pyl35a_0) = d[0];
+                id(pyl35a_1) = d[1];
+                id(pyl35a_2) = d[2];
+                id(pyl35a_3) = d[3];
+              }
+
+              // ---------- 0x400 range (vendor per-pack group) ----------
+              // 0x400–0x403 System status (replicated frame shape; SOC varies by slot)
+              if (fid >= 0x400 && fid <= 0x403 && d.size() >= 8) {
+                // d[4] often reports total pack count; keep it
+                id(bank_pack_count)   = d[4];
+
+                // slot index 0..3 from the CAN ID
+                const int i = slot(0x400);
+                if (i >= 0 && i < N_PACKS) {
+                  id(last_seen)[i]     = now;
+                  id(pack_present)[i]  = true;
+
+
+                }
+
+                // keep the bank flags (if you want a bank-level bit view)
+                id(bank_status_flags) = d[7];
+              }
+
+              // 0x405 Heartbeat
+              if (fid == 0x405) {
+                id(last_heartbeat) = now;
+              }
+
+              // 0x420–0x423 Pack limits (per-pack)
+              {
+                int i = slot(0x420);
+                if (i >= 0 && i < N_PACKS && d.size() >= 8) {
+                  id(last_seen)[i]    = now;
+                  id(pack_present)[i] = true;
+                  id(v_nom)[i]        = le16(0) / 10.0f;   // 0.1 V
+                  id(i_chg_lim)[i]    = le16(2) / 10.0f;   // 0.1 A
+                  id(i_dchg_lim)[i]   = le16(4) / 10.0f;   // 0.1 A
+                  id(cap_ah)[i]       = le16(6) / 10.0f;   // 0.1 Ah (vendor-specific)
+                }
+              }
+
+              // 0x440–0x443 Pack Meas A
+              {
+                int i = slot(0x440);
+                if (i >= 0 && i < N_PACKS && d.size() >= 8) {
+                  id(last_seen)[i]    = now;
+                  id(pack_present)[i] = true;
+                  id(v_pack)[i]       = le16(0) / 100.0f;  // 0.01 V
+                  uint16_t raw_i      = le16(4);           // scale TBD
+                  id(i_pack)[i]       = raw_i * 0.001f;    // provisional A
+                  id(cycle_cnt)[i]    = le16(6);
+                                    // per-pack values
+                  id(pack_soc_pct)[i]  = d[4];   // 0..100
+                  id(pack_soh_pct)[i]  = d[5];   // vendor-specific; often 0..100 or 0
+                }
+              }
+
+              // 0x460–0x463 Pack Meas B
+              {
+                int i = slot(0x460);
+                if (i >= 0 && i < N_PACKS && d.size() >= 8) {
+                  id(last_seen)[i]     = now;
+                  id(pack_present)[i]  = true;
+                  id(t_max)[i]         = le16(0) / 10.0f;  // 0.1 °C
+                  id(t_min)[i]         = le16(2) / 10.0f;  // 0.1 °C
+                  id(cell_mv_max)[i]   = le16(4);          // mV
+                  id(cell_mv_min)[i]   = le16(6);          // mV
+                }
+              }
+
+              // 0x480–0x483 Config/flags
+              {
+                int i = slot(0x480);
+                if (i >= 0 && i < N_PACKS && d.size() >= 8) {
+                  id(last_seen)[i]    = now;
+                  id(pack_present)[i] = true;
+                  id(series_code)[i]  = le16(2);
+                  id(cfg_b0)[i]       = d[0];
+                  id(cfg_b1)[i]       = d[1];
+                  id(cfg_b4)[i]       = d[4];   // parallel strings
+                  id(cfg_b5)[i]       = d[5];
+                  if (d[4] > 0 && d[4] <= N_PACKS) id(bank_parallel) = d[4];
+                }
+              }
+
+interval:
+  # Check pack presence timeout
+  - interval: 1s
+    then:
+      - lambda: |-
+          const uint32_t now = millis();
+          for (int i = 0; i < N_PACKS; i++) {
+            if (id(pack_present)[i] && (now - id(last_seen)[i] > ${PACK_TIMEOUT_MS})) {
+              id(pack_present)[i] = false;
+            }
+          }
+
+  # Transmit heartbeat every 5s (0x405)
+  - interval: 5s
+    then:
+      - canbus.send:
+          canbus_id: can0
+          can_id: 0x405
+          use_extended_id: false
+          data: [0,0,0,0,0,0,0,0]
+
+globals:
+  # ============ SYSTEM TIMING ============
+  
+  - id: last_heartbeat
+    type: unsigned long
+    initial_value: "0"
+
+  # ============ PER-PACK TRACKING ARRAYS ============
+  
+  - id: last_seen
+    type: unsigned long[N_PACKS]
+    
+  - id: pack_present
+    type: bool[N_PACKS]
+
+  # ============ BANK-LEVEL GLOBALS (0x300 range - Pylon v1.2) ============
+  
+  # From 0x351 - Charge/Discharge Limits
+  - id: bank_v_chg_max
+    type: float
+    initial_value: "0.0"
+    # Recommended charge voltage [V]
+    
+  - id: bank_i_chg_lim
+    type: float
+    initial_value: "0.0"
+    # Charge current limit [A]
+    
+  - id: bank_i_dchg_lim
+    type: float
+    initial_value: "0.0"
+    # Discharge current limit [A]
+    
+  - id: bank_cap_ah
+    type: float
+    initial_value: "0.0"
+
+  - id: bank_parallel
+    type: int
+    initial_value: "0"  
+
+  # From 0x355 - State of Charge/Health
+  - id: bank_soc_pct
+    type: int
+    initial_value: "0"
+    # State of Charge [%]
+    
+  - id: bank_soh_pct
+    type: int
+    initial_value: "0"
+    # State of Health [%]
+    
+  - id: bank_cell_mv_max
+    type: int
+    initial_value: "0"
+    # Max cell voltage [mV] (vendor extension)
+    
+  - id: bank_cell_mv_min
+    type: int
+    initial_value: "0"
+    # Min cell voltage [mV] (vendor extension)
+
+  # From 0x356 - Measurements
+  - id: bank_v_pack
+    type: float
+    initial_value: "0.0"
+    # Pack voltage [V]
+    
+  - id: bank_i_pack
+    type: float
+    initial_value: "0.0"
+    # Pack current [A, signed]
+    
+  - id: bank_t_avg
+    type: float
+    initial_value: "0.0"
+    # Average cell temperature [°C]
+    
+  - id: bank_t_min
+    type: float
+    initial_value: "0.0"
+    # Min temperature [°C] (vendor extension)
+
+  # From 0x359 - Status & Alarms
+  - id: bank_alarms
+    type: unsigned long
+    initial_value: "0"
+    # Protection/alarm bitfield (bytes 0-3)
+    
+  - id: bank_pack_count
+    type: int
+    initial_value: "0"
+    # Number of battery modules/packs
+
+  # From 0x35C - Request Flags
+  - id: bank_status_flags
+    type: int
+    initial_value: "0"
+    # Charge/discharge enable flags
+
+  # ============ PER-PACK GLOBALS (0x400 range - Vendor-specific) ============
+  # From 0x400-0x403 
+  - id: pack_soc_pct
+    type: int[N_PACKS]
+
+  - id: pack_soh_pct
+    type: int[N_PACKS]
+
+  # From 0x420-0x423 - Pack Limits
+  - id: v_nom
+    type: float[N_PACKS]
+    
+  - id: i_chg_lim
+    type: float[N_PACKS]
+    
+  - id: i_dchg_lim
+    type: float[N_PACKS]
+    
+  - id: cap_ah
+    type: float[N_PACKS]
+    # Per-pack capacity from 0x420-0x423 B6-7 [Ah] (CORRECTED to array)
+
+  # From 0x440-0x443 - Pack Measurements A
+  - id: v_pack
+    type: float[N_PACKS]
+    
+  - id: i_pack
+    type: float[N_PACKS]
+    # Provisional: may be nameplate rating, not live current
+    
+  - id: cycle_cnt
+    type: int[N_PACKS]
+
+  # From 0x460-0x463 - Pack Measurements B
+  - id: t_max
+    type: float[N_PACKS]
+    
+  - id: t_min
+    type: float[N_PACKS]
+    
+  - id: cell_mv_max
+    type: int[N_PACKS]
+    
+  - id: cell_mv_min
+    type: int[N_PACKS]
+
+  # Unused legacy arrays (kept for potential future use)
+  - id: series_code
+    type: int[N_PACKS]
+    
+  - id: cfg_b0
+    type: int[N_PACKS]
+    
+  - id: cfg_b1
+    type: int[N_PACKS]
+    
+  - id: cfg_b4
+    type: int[N_PACKS]
+    
+  - id: cfg_b5
+    type: int[N_PACKS]
+### Alarms and Such #####
+  - id: pyl_req          # 0x35C Byte0 (V1.2)
+    type: int
+    initial_value: "0"
+  - id: pyl_p0           # 0x359 Byte0 Protection (V1.2)
+    type: int
+    initial_value: "0"
+  - id: pyl_p1           # 0x359 Byte1 Protection (V1.2)
+    type: int
+    initial_value: "0"
+  - id: pyl_a0           # 0x359 Byte2 Alarm (V1.2)
+    type: int
+    initial_value: "0"
+  - id: pyl_a1           # 0x359 Byte3 Alarm (V1.2)
+    type: int
+    initial_value: "0"
+  - id: pyl35a_0         # 0x35A bytes 0..3 (V1.3 alarms core)
+    type: int
+    initial_value: "0"
+  - id: pyl35a_1
+    type: int
+    initial_value: "0"
+  - id: pyl35a_2
+    type: int
+    initial_value: "0"
+  - id: pyl35a_3
+    type: int
+    initial_value: "0"    
+
+sensor:
+  # ============ BANK-LEVEL SENSORS (0x300 range - Pylon v1.2) ============
+  
+  # === Primary Measurements (0x356) ===
+  
+  - platform: template
+    name: "Bank Voltage"
+    unit_of_measurement: "V"
+    accuracy_decimals: 2
+    device_class: voltage
+    state_class: measurement
+    lambda: return id(bank_v_pack);
+    update_interval: 1s
+
+  - platform: template
+    name: "Bank Current"
+    unit_of_measurement: "A"
+    accuracy_decimals: 1
+    device_class: current
+    state_class: measurement
+    lambda: return id(bank_i_pack);
+    update_interval: 1s
+
+  - platform: template
+    name: "Bank Power"
+    unit_of_measurement: "W"
+    accuracy_decimals: 0
+    device_class: power
+    state_class: measurement
+    lambda: return id(bank_v_pack) * id(bank_i_pack);
+    update_interval: 1s
+
+  - platform: template
+    name: "Bank Temperature Average"
+    unit_of_measurement: "°C"
+    accuracy_decimals: 1
+    device_class: temperature
+    state_class: measurement
+    lambda: return id(bank_t_avg);
+    update_interval: 1s
+
+  - platform: template
+    name: "Bank Temperature Min"
+    unit_of_measurement: "°C"
+    accuracy_decimals: 1
+    device_class: temperature
+    state_class: measurement
+    lambda: return id(bank_t_min);
+    update_interval: 1s
+
+  - platform: template
+    name: "Bank Delta Temperature"
+    unit_of_measurement: "°C"
+    accuracy_decimals: 1
+    device_class: temperature
+    state_class: measurement
+    lambda: return id(bank_t_avg) - id(bank_t_min);
+    update_interval: 1s
+
+  # === State of Charge/Health (0x355) ===
+  
+  - platform: template
+    name: "Bank SOC"
+    unit_of_measurement: "%"
+    accuracy_decimals: 0
+    device_class: battery
+    state_class: measurement
+    lambda: return id(bank_soc_pct);
+    update_interval: 1s
+
+  - platform: template
+    name: "Bank SOH"
+    unit_of_measurement: "%"
+    accuracy_decimals: 0
+    state_class: measurement
+    lambda: return id(bank_soh_pct);
+    update_interval: 1s
+
+  - platform: template
+    name: "Bank Cell Voltage Max"
+    unit_of_measurement: "mV"
+    accuracy_decimals: 0
+    device_class: voltage
+    state_class: measurement
+    lambda: return id(bank_cell_mv_max);
+    update_interval: 1s
+
+  - platform: template
+    name: "Bank Cell Voltage Min"
+    unit_of_measurement: "mV"
+    accuracy_decimals: 0
+    device_class: voltage
+    state_class: measurement
+    lambda: return id(bank_cell_mv_min);
+    update_interval: 1s
+
+  - platform: template
+    name: "Bank Delta Cell Voltage"
+    unit_of_measurement: "mV"
+    accuracy_decimals: 0
+    device_class: voltage
+    state_class: measurement
+    lambda: return id(bank_cell_mv_max) - id(bank_cell_mv_min);
+    update_interval: 1s
+
+  # === Charge/Discharge Limits (0x351) ===
+  
+  - platform: template
+    name: "Bank Charge Voltage Max"
+    unit_of_measurement: "V"
+    accuracy_decimals: 1
+    device_class: voltage
+    state_class: measurement
+    lambda: return id(bank_v_chg_max);
+    update_interval: 5s
+
+  - platform: template
+    name: "Bank Charge Current Limit"
+    unit_of_measurement: "A"
+    accuracy_decimals: 1
+    device_class: current
+    state_class: measurement
+    lambda: return id(bank_i_chg_lim);
+    update_interval: 5s
+
+  - platform: template
+    name: "Bank Discharge Current Limit"
+    unit_of_measurement: "A"
+    accuracy_decimals: 1
+    device_class: current
+    state_class: measurement
+    lambda: return id(bank_i_dchg_lim);
+    update_interval: 5s
+
+  - platform: template
+    name: "Bank Charge Power Limit"
+    unit_of_measurement: "W"
+    accuracy_decimals: 0
+    device_class: power
+    state_class: measurement
+    lambda: return id(bank_v_chg_max) * id(bank_i_chg_lim);
+    update_interval: 5s
+
+  - platform: template
+    name: "Bank Discharge Power Limit"
+    unit_of_measurement: "W"
+    accuracy_decimals: 0
+    device_class: power
+    state_class: measurement
+    lambda: return id(bank_v_chg_max) * id(bank_i_dchg_lim);
+    update_interval: 5s
+
+  - platform: template
+    name: "Bank Capacity"
+    unit_of_measurement: "Ah"
+    accuracy_decimals: 1
+    state_class: measurement
+    lambda: return id(bank_cap_ah);
+    update_interval: 5s
+    # From 0x35F (capacity), with fallback from 0x359*default/module
+
+  # === Status & Alarms (0x359) ===
+  
+  - platform: template
+    name: "Bank Pack Count"
+    accuracy_decimals: 0
+    state_class: measurement
+    lambda: return id(bank_pack_count);
+    update_interval: 5s
+
+  - platform: template
+    name: "Bank Alarms"
+    accuracy_decimals: 0
+    lambda: return id(bank_alarms);
+    update_interval: 1s
+
+  # === Request Flags (0x35C) ===
+  
+  - platform: template
+    name: "Bank Flags (raw)"
+    icon: mdi:flag-variant
+    update_interval: 1s
+    lambda: |-
+      return (float)(id(bank_status_flags) & 0xFF);
+
+
+  # ============ PER-PACK SENSORS (0x400 range) ============
+  # NOTE: Per-pack SOC removed - not available in this protocol
+  # 0x400-0x403 contains bank-level SOC only (replicated)
+
+  # ============ PACK 0 SENSORS ============
+  
+  - platform: template
+    name: "Pack 0 Voltage"
+    unit_of_measurement: "V"
+    accuracy_decimals: 2
+    device_class: voltage
+    state_class: measurement
+    lambda: return id(v_pack)[0];
+    update_interval: 1s
+
+  # - platform: template
+  #   name: "Pack 0 Nominal Voltage"
+  #   unit_of_measurement: "V"
+  #   accuracy_decimals: 1
+  #   device_class: voltage
+  #   state_class: measurement
+  #   lambda: return id(v_nom)[0];
+  #   update_interval: 5s
+
+  - platform: template
+    name: "Pack 0 Charge Limit"
+    unit_of_measurement: "A"
+    accuracy_decimals: 1
+    device_class: current
+    state_class: measurement
+    lambda: return id(i_chg_lim)[0];
+    update_interval: 5s
+
+  - platform: template
+    name: "Pack 0 Discharge Limit"
+    unit_of_measurement: "A"
+    accuracy_decimals: 1
+    device_class: current
+    state_class: measurement
+    lambda: return id(i_dchg_lim)[0];
+    update_interval: 5s
+
+  - platform: template
+    name: "Pack 0 Capacity"
+    unit_of_measurement: "Ah"
+    accuracy_decimals: 1
+    state_class: measurement
+    lambda: return id(cap_ah)[0];
+    update_interval: 5s
+
+  - platform: template
+    name: "Pack 0 Temperature Max"
+    unit_of_measurement: "°C"
+    accuracy_decimals: 1
+    device_class: temperature
+    state_class: measurement
+    lambda: return id(t_max)[0];
+    update_interval: 1s
+
+  - platform: template
+    name: "Pack 0 Temperature Min"
+    unit_of_measurement: "°C"
+    accuracy_decimals: 1
+    device_class: temperature
+    state_class: measurement
+    lambda: return id(t_min)[0];
+    update_interval: 1s
+
+  - platform: template
+    name: "Pack 0 Delta Temperature"
+    unit_of_measurement: "°C"
+    accuracy_decimals: 1
+    device_class: temperature
+    state_class: measurement
+    lambda: return id(t_max)[0] - id(t_min)[0];
+    update_interval: 1s
+
+  - platform: template
+    name: "Pack 0 Cell Voltage Max"
+    unit_of_measurement: "mV"
+    accuracy_decimals: 0
+    device_class: voltage
+    state_class: measurement
+    lambda: return id(cell_mv_max)[0];
+    update_interval: 1s
+
+  - platform: template
+    name: "Pack 0 Cell Voltage Min"
+    unit_of_measurement: "mV"
+    accuracy_decimals: 0
+    device_class: voltage
+    state_class: measurement
+    lambda: return id(cell_mv_min)[0];
+    update_interval: 1s
+
+  - platform: template
+    name: "Pack 0 Delta Cell Voltage"
+    unit_of_measurement: "mV"
+    accuracy_decimals: 0
+    device_class: voltage
+    state_class: measurement
+    lambda: return id(cell_mv_max)[0] - id(cell_mv_min)[0];
+    update_interval: 1s
+
+  - platform: template
+    name: "Pack 0 Cycle Count"
+    accuracy_decimals: 0
+    state_class: total_increasing
+    lambda: return id(cycle_cnt)[0];
+    update_interval: 5s
+
+  # ============ PACK 1 SENSORS ============
+  
+  - platform: template
+    name: "Pack 1 Voltage"
+    unit_of_measurement: "V"
+    accuracy_decimals: 2
+    device_class: voltage
+    state_class: measurement
+    lambda: return id(v_pack)[1];
+    update_interval: 1s
+
+  # - platform: template
+  #   name: "Pack 1 Nominal Voltage"
+  #   unit_of_measurement: "V"
+  #   accuracy_decimals: 1
+  #   device_class: voltage
+  #   state_class: measurement
+  #   lambda: return id(v_nom)[1];
+  #   update_interval: 5s
+
+  - platform: template
+    name: "Pack 1 Capacity"
+    unit_of_measurement: "Ah"
+    accuracy_decimals: 1
+    state_class: measurement
+    lambda: return id(cap_ah)[1];
+    update_interval: 5s
+
+  - platform: template
+    name: "Pack 1 Temperature Max"
+    unit_of_measurement: "°C"
+    accuracy_decimals: 1
+    device_class: temperature
+    state_class: measurement
+    lambda: return id(t_max)[1];
+    update_interval: 1s
+
+  - platform: template
+    name: "Pack 1 Temperature Min"
+    unit_of_measurement: "°C"
+    accuracy_decimals: 1
+    device_class: temperature
+    state_class: measurement
+    lambda: return id(t_min)[1];
+    update_interval: 1s
+
+  - platform: template
+    name: "Pack 1 Delta Temperature"
+    unit_of_measurement: "°C"
+    accuracy_decimals: 1
+    device_class: temperature
+    state_class: measurement
+    lambda: return id(t_max)[1] - id(t_min)[1];
+    update_interval: 1s
+
+  - platform: template
+    name: "Pack 1 Cell Voltage Max"
+    unit_of_measurement: "mV"
+    accuracy_decimals: 0
+    device_class: voltage
+    state_class: measurement
+    lambda: return id(cell_mv_max)[1];
+    update_interval: 1s
+
+  - platform: template
+    name: "Pack 1 Cell Voltage Min"
+    unit_of_measurement: "mV"
+    accuracy_decimals: 0
+    device_class: voltage
+    state_class: measurement
+    lambda: return id(cell_mv_min)[1];
+    update_interval: 1s
+
+  - platform: template
+    name: "Pack 1 Delta Cell Voltage"
+    unit_of_measurement: "mV"
+    accuracy_decimals: 0
+    device_class: voltage
+    state_class: measurement
+    lambda: return id(cell_mv_max)[1] - id(cell_mv_min)[1];
+    update_interval: 1s
+
+  # ============ PACK 2 SENSORS ============
+  
+  - platform: template
+    name: "Pack 2 Voltage"
+    unit_of_measurement: "V"
+    accuracy_decimals: 2
+    device_class: voltage
+    state_class: measurement
+    lambda: return id(v_pack)[2];
+    update_interval: 1s
+
+  # - platform: template
+  #   name: "Pack 2 Nominal Voltage"
+  #   unit_of_measurement: "V"
+  #   accuracy_decimals: 1
+  #   device_class: voltage
+  #   state_class: measurement
+  #   lambda: return id(v_nom)[2];
+  #   update_interval: 5s
+
+  - platform: template
+    name: "Pack 2 Capacity"
+    unit_of_measurement: "Ah"
+    accuracy_decimals: 1
+    state_class: measurement
+    lambda: return id(cap_ah)[2];
+    update_interval: 5s
+
+  - platform: template
+    name: "Pack 2 Temperature Max"
+    unit_of_measurement: "°C"
+    accuracy_decimals: 1
+    device_class: temperature
+    state_class: measurement
+    lambda: return id(t_max)[2];
+    update_interval: 1s
+
+  - platform: template
+    name: "Pack 2 Temperature Min"
+    unit_of_measurement: "°C"
+    accuracy_decimals: 1
+    device_class: temperature
+    state_class: measurement
+    lambda: return id(t_min)[2];
+    update_interval: 1s
+
+  - platform: template
+    name: "Pack 2 Delta Temperature"
+    unit_of_measurement: "°C"
+    accuracy_decimals: 1
+    device_class: temperature
+    state_class: measurement
+    lambda: return id(t_max)[2] - id(t_min)[2];
+    update_interval: 1s
+
+  - platform: template
+    name: "Pack 2 Cell Voltage Max"
+    unit_of_measurement: "mV"
+    accuracy_decimals: 0
+    device_class: voltage
+    state_class: measurement
+    lambda: return id(cell_mv_max)[2];
+    update_interval: 1s
+
+  - platform: template
+    name: "Pack 2 Cell Voltage Min"
+    unit_of_measurement: "mV"
+    accuracy_decimals: 0
+    device_class: voltage
+    state_class: measurement
+    lambda: return id(cell_mv_min)[2];
+    update_interval: 1s
+
+  - platform: template
+    name: "Pack 2 Delta Cell Voltage"
+    unit_of_measurement: "mV"
+    accuracy_decimals: 0
+    device_class: voltage
+    state_class: measurement
+    lambda: return id(cell_mv_max)[2] - id(cell_mv_min)[2];
+    update_interval: 1s
+
+  # ============ PACK 3 SENSORS ============
+  
+  - platform: template
+    name: "Pack 3 Voltage"
+    unit_of_measurement: "V"
+    accuracy_decimals: 2
+    device_class: voltage
+    state_class: measurement
+    lambda: return id(v_pack)[3];
+    update_interval: 1s
+
+  # - platform: template
+  #   name: "Pack 3 Nominal Voltage"
+  #   unit_of_measurement: "V"
+  #   accuracy_decimals: 1
+  #   device_class: voltage
+  #   state_class: measurement
+  #   lambda: return id(v_nom)[3];
+  #   update_interval: 5s
+
+  - platform: template
+    name: "Pack 3 Capacity"
+    unit_of_measurement: "Ah"
+    accuracy_decimals: 1
+    state_class: measurement
+    lambda: return id(cap_ah)[3];
+    update_interval: 5s
+
+  - platform: template
+    name: "Pack 3 Temperature Max"
+    unit_of_measurement: "°C"
+    accuracy_decimals: 1
+    device_class: temperature
+    state_class: measurement
+    lambda: return id(t_max)[3];
+    update_interval: 1s
+
+  - platform: template
+    name: "Pack 3 Temperature Min"
+    unit_of_measurement: "°C"
+    accuracy_decimals: 1
+    device_class: temperature
+    state_class: measurement
+    lambda: return id(t_min)[3];
+    update_interval: 1s
+
+  - platform: template
+    name: "Pack 3 Delta Temperature"
+    unit_of_measurement: "°C"
+    accuracy_decimals: 1
+    device_class: temperature
+    state_class: measurement
+    lambda: return id(t_max)[3] - id(t_min)[3];
+    update_interval: 1s
+
+  - platform: template
+    name: "Pack 3 Cell Voltage Max"
+    unit_of_measurement: "mV"
+    accuracy_decimals: 0
+    device_class: voltage
+    state_class: measurement
+    lambda: return id(cell_mv_max)[3];
+    update_interval: 1s
+
+  - platform: template
+    name: "Pack 3 Cell Voltage Min"
+    unit_of_measurement: "mV"
+    accuracy_decimals: 0
+    device_class: voltage
+    state_class: measurement
+    lambda: return id(cell_mv_min)[3];
+    update_interval: 1s
+
+  - platform: template
+    name: "Pack 3 Delta Cell Voltage"
+    unit_of_measurement: "mV"
+    accuracy_decimals: 0
+    device_class: voltage
+    state_class: measurement
+    lambda: return id(cell_mv_max)[3] - id(cell_mv_min)[3];
+    update_interval: 1s
+ 
+ ##### Bank Capacity Details #####
+
+  - platform: template
+    name: "Bank Capacity Rated"
+    unit_of_measurement: "Ah"
+    accuracy_decimals: 0
+    update_interval: 10s
+    lambda: |-
+      return id(bank_cap_ah);
+
+  - platform: template
+    name: "Pack 0 Capacity Est"
+    unit_of_measurement: "Ah"
+    accuracy_decimals: 0
+    update_interval: 10s
+    lambda: |-
+      if (!id(pack_present)[0]) return NAN;
+      int p = id(bank_parallel) > 0 ? id(bank_parallel) : max(1, id(bank_pack_count));
+      return id(bank_cap_ah) / (float)p;
+
+  - platform: template
+    name: "Pack 1 Capacity Est"
+    unit_of_measurement: "Ah"
+    accuracy_decimals: 0
+    update_interval: 10s
+    lambda: |-
+      if (!id(pack_present)[1]) return NAN;
+      int p = id(bank_parallel) > 0 ? id(bank_parallel) : max(1, id(bank_pack_count));
+      return id(bank_cap_ah) / (float)p;
+
+  - platform: template
+    name: "Pack 2 Capacity Est"
+    unit_of_measurement: "Ah"
+    accuracy_decimals: 0
+    update_interval: 10s
+    lambda: |-
+      if (!id(pack_present)[2]) return NAN;
+      int p = id(bank_parallel) > 0 ? id(bank_parallel) : max(1, id(bank_pack_count));
+      return id(bank_cap_ah) / (float)p;
+
+  - platform: template
+    name: "Pack 3 Capacity Est"
+    unit_of_measurement: "Ah"
+    accuracy_decimals: 0
+    update_interval: 10s
+    lambda: |-
+      if (!id(pack_present)[3]) return NAN;
+      int p = id(bank_parallel) > 0 ? id(bank_parallel) : max(1, id(bank_pack_count));
+      return id(bank_cap_ah) / (float)p;
+### Pack SOC Percent
+
+  - platform: template
+    name: "Pack 0 SOC"
+    unit_of_measurement: "%"
+    accuracy_decimals: 0
+    device_class: battery
+    state_class: measurement
+    lambda: |-
+      if (!id(pack_present)[0]) return NAN;
+      return (float) id(pack_soc_pct)[0];
+    update_interval: 1s
+
+  - platform: template
+    name: "Pack 1 SOC"
+    unit_of_measurement: "%"
+    accuracy_decimals: 0
+    device_class: battery
+    state_class: measurement
+    lambda: |-
+      if (!id(pack_present)[1]) return NAN;
+      return (float) id(pack_soc_pct)[1];
+    update_interval: 1s
+
+  - platform: template
+    name: "Pack 2 SOC"
+    unit_of_measurement: "%"
+    accuracy_decimals: 0
+    device_class: battery
+    state_class: measurement
+    lambda: |-
+      if (!id(pack_present)[2]) return NAN;
+      return (float) id(pack_soc_pct)[2];
+    update_interval: 1s
+
+  - platform: template
+    name: "Pack 3 SOC"
+    unit_of_measurement: "%"
+    accuracy_decimals: 0
+    device_class: battery
+    state_class: measurement
+    lambda: |-
+      if (!id(pack_present)[3]) return NAN;
+      return (float) id(pack_soc_pct)[3];
+    update_interval: 1s
+
+### Pack SOH Percent
+
+  - platform: template
+    name: "Pack 0 SOH"
+    unit_of_measurement: "%"
+    accuracy_decimals: 0
+    device_class: battery
+    state_class: measurement
+    lambda: |-
+      if (!id(pack_present)[0]) return NAN;
+      return (float) id(pack_soh_pct)[0];
+    update_interval: 1s
+
+  - platform: template
+    name: "Pack 1 SOH"
+    unit_of_measurement: "%"
+    accuracy_decimals: 0
+    device_class: battery
+    state_class: measurement
+    lambda: |-
+      if (!id(pack_present)[1]) return NAN;
+      return (float) id(pack_soh_pct)[1];
+    update_interval: 1s
+
+  - platform: template
+    name: "Pack 2 SOH"
+    unit_of_measurement: "%"
+    accuracy_decimals: 0
+    device_class: battery
+    state_class: measurement
+    lambda: |-
+      if (!id(pack_present)[2]) return NAN;
+      return (float) id(pack_soh_pct)[2];
+    update_interval: 1s
+
+  - platform: template
+    name: "Pack 3 SOH"
+    unit_of_measurement: "%"
+    accuracy_decimals: 0
+    device_class: battery
+    state_class: measurement
+    lambda: |-
+      if (!id(pack_present)[3]) return NAN;
+      return (float) id(pack_soh_pct)[3];
+    update_interval: 1s
+
+# Binary sensors for pack presence detection
+binary_sensor:
+  - platform: template
+    name: "Pack 0 Present"
+    lambda: return id(pack_present)[0];
+
+  - platform: template
+    name: "Pack 1 Present"
+    lambda: return id(pack_present)[1];
+
+  - platform: template
+    name: "Pack 2 Present"
+    lambda: return id(pack_present)[2];
+
+  - platform: template
+    name: "Pack 3 Present"
+    lambda: return id(pack_present)[3];
+
+# --- Human-readable summaries ---
+text_sensor:
+  - platform: template
+    name: "Pylon Request Flags (0x35C)"
+    update_interval: 1s
+    lambda: |-
+      const uint8_t f = id(pyl_req);
+      std::string out;
+      if (f & 0x80) out += (out.empty()?"":" ,") + std::string("Charge enable");
+      if (f & 0x40) out += (out.empty()?"":" ,") + std::string("Discharge enable");
+      if (f & 0x20) out += (out.empty()?"":" ,") + std::string("Force charge I");
+      if (f & 0x10) out += (out.empty()?"":" ,") + std::string("Force charge II");
+      if (f & 0x08) out += (out.empty()?"":" ,") + std::string("Full charge req");
+      if (out.empty()) out = "none";
+      return out;
+
+  - platform: template
+    name: "Pylon Protections (0x359)"
+    update_interval: 1s
+    lambda: |-
+      const uint8_t p0 = id(pyl_p0), p1 = id(pyl_p1);
+      std::string out;
+      if (p0 & 0x80) out += (out.empty()?"":" ,") + std::string("DCH OC prot");
+      if (p0 & 0x10) out += (out.empty()?"":" ,") + std::string("Cell under-temp prot");
+      if (p0 & 0x08) out += (out.empty()?"":" ,") + std::string("Cell over-temp prot");
+      if (p0 & 0x04) out += (out.empty()?"":" ,") + std::string("Under-volt prot");
+      if (p0 & 0x02) out += (out.empty()?"":" ,") + std::string("Over-volt prot");
+      if (p1 & 0x08) out += (out.empty()?"":" ,") + std::string("System error");
+      if (p1 & 0x01) out += (out.empty()?"":" ,") + std::string("CHG OC prot");
+      if (out.empty()) out = "none";
+      return out;
+
+  - platform: template
+    name: "Pylon Alarms (0x359/0x35A)"
+    update_interval: 1s
+    lambda: |-
+      // Prefer V1.3 (0x35A) if present; else V1.2 (0x359)
+      uint8_t a0 = id(pyl_a0), a1 = id(pyl_a1);
+      if (id(pyl35a_0) | id(pyl35a_1) | id(pyl35a_2) | id(pyl35a_3)) {
+        a0 = id(pyl35a_0); a1 = id(pyl35a_1);
+      }
+      std::string out;
+      if (a0 & 0x80) out += (out.empty()?"":" ,") + std::string("DCH high current");
+      if (a0 & 0x10) out += (out.empty()?"":" ,") + std::string("Cell low-temp");
+      if (a0 & 0x08) out += (out.empty()?"":" ,") + std::string("Cell high-temp");
+      if (a0 & 0x04) out += (out.empty()?"":" ,") + std::string("Low voltage");
+      if (a0 & 0x02) out += (out.empty()?"":" ,") + std::string("High voltage");
+      if (a1 & 0x08) out += (out.empty()?"":" ,") + std::string("Internal comms fail");
+      if (a1 & 0x01) out += (out.empty()?"":" ,") + std::string("CHG high current");
+      if (out.empty()) out = "none";
+      return out;
